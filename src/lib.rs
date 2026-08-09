@@ -1,8 +1,11 @@
 #![cfg_attr(not(feature = "sim"), no_std)]
 
+pub mod assets;
 pub mod behavior;
+pub mod dirty;
 pub mod game;
 pub mod hardware;
+pub mod layer;
 pub mod stickman;
 
 #[cfg(feature = "device")]

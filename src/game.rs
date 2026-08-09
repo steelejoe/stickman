@@ -1,8 +1,10 @@
 //! Shared game state and update/draw loop (device + simulation).
 
+use crate::assets::{self, Rgb565Image};
 use crate::behavior::plugin::BehaviorManager;
+use crate::dirty::{self, DIRTY_BUF_LEN};
+use crate::layer;
 use crate::stickman::geometry::StickmanState;
-use crate::stickman::render;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::RgbColor;
@@ -13,7 +15,12 @@ pub struct Game {
     stickman_state: StickmanState,
     /// Previous pose, used to erase before redrawing (avoids full-screen clears).
     prev_state: Option<StickmanState>,
-    floor_drawn: bool,
+    /// Layer 0 has been painted; later frames only dirty-restore under the figure.
+    background_drawn: bool,
+    /// Optional layer-0 backdrop (`'static` — embedded or leaked at startup).
+    background: Option<Rgb565Image<'static>>,
+    /// Scratch tile for flicker-free dirty presents (composed in RAM, one blit).
+    dirty_buf: [Rgb565; DIRTY_BUF_LEN],
 }
 
 impl Game {
@@ -22,8 +29,22 @@ impl Game {
             behavior_mgr: BehaviorManager::new(StickmanState::default()),
             stickman_state: StickmanState::default(),
             prev_state: None,
-            floor_drawn: false,
+            background_drawn: false,
+            background: assets::embedded_background(),
+            dirty_buf: [Rgb565::BLACK; DIRTY_BUF_LEN],
         }
+    }
+
+    /// Install a layer-0 backdrop (replaces any embedded background).
+    pub fn set_background(&mut self, image: Rgb565Image<'static>) {
+        self.background = Some(image);
+        self.background_drawn = false;
+        self.prev_state = None;
+    }
+
+    /// True when a backdrop image is installed.
+    pub fn has_background_image(&self) -> bool {
+        self.background.is_some()
     }
 
     /// Cycle to the next behavior (device button / touch, or sim input).
@@ -41,14 +62,14 @@ impl Game {
     /// When animation is paused (e.g. idle), the AMOLED can keep showing the
     /// last image with no further QSPI traffic.
     pub fn is_frame_static(&self) -> bool {
-        self.floor_drawn && self.prev_state.as_ref() == Some(&self.stickman_state)
+        self.background_drawn && self.prev_state.as_ref() == Some(&self.stickman_state)
     }
 
     /// Draw the current frame if the pose changed.
     ///
-    /// On device, prefer calling this without a full-screen clear: the previous
-    /// stickman is erased in black, then the new pose is drawn. Static frames
-    /// are a no-op so paused animation does not redraw.
+    /// After the initial layer-0 paint, stickman updates are composed into a
+    /// dirty tile in RAM and pushed with one `fill_contiguous` — avoiding the
+    /// erase hole that caused flicker on the device QSPI panel.
     pub fn draw<D>(&mut self, display: &mut D) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
@@ -57,18 +78,19 @@ impl Game {
             return Ok(());
         }
 
-        if !self.floor_drawn {
-            render::draw_floor(display)?;
-            self.floor_drawn = true;
+        if !self.background_drawn {
+            layer::draw_background(display, self.background.as_ref())?;
+            self.background_drawn = true;
         }
 
-        if let Some(prev) = self.prev_state.take() {
-            // Erase the previous pose. Floor pixels under the feet may need a redraw.
-            render::draw_stickman_colored(display, &prev, Rgb565::BLACK)?;
-            render::draw_floor(display)?;
-        }
-
-        self.behavior_mgr.draw(display, &self.stickman_state)?;
+        let prev = self.prev_state.take();
+        dirty::present_stickman_frame(
+            display,
+            &mut self.dirty_buf,
+            prev.as_ref(),
+            &self.stickman_state,
+            self.background.as_ref(),
+        )?;
         self.prev_state = Some(self.stickman_state.clone());
         Ok(())
     }

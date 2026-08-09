@@ -1,7 +1,7 @@
 //! CST816x capacitive touch controller via I2C.
 //!
-//! Minimal blocking driver for detecting touch events (cycle behavior).
 //! LilyGo T-Display-S3 AMOLED Touch (1.91"): SDA=GPIO3, SCL=GPIO2, IRQ=GPIO21.
+//! Taps cycle the active behavior.
 
 use embedded_hal::i2c::I2c;
 
@@ -10,6 +10,8 @@ const CST816_ADDR: u8 = 0x15;
 
 /// Register addresses
 const REG_POINTS: u8 = 0x02;
+/// Write `0xFF` here to keep the chip from entering auto-sleep (no RST pin on this board).
+const REG_AUTOSLEEP: u8 = 0xFE;
 
 /// Touch point data
 #[derive(Clone, Copy, Debug, Default)]
@@ -34,6 +36,11 @@ where
             i2c,
             prev_pressed: false,
         }
+    }
+
+    /// Disable auto-sleep so I2C polls keep working without a hardware reset pin.
+    pub fn disable_auto_sleep(&mut self) -> Result<(), I2C::Error> {
+        self.i2c.write(CST816_ADDR, &[REG_AUTOSLEEP, 0xFF])
     }
 
     /// Read current touch point, if any.

@@ -85,6 +85,7 @@ impl App {
         esp_println::println!("Display ready");
 
         // CST816 on LilyGo 1.91" AMOLED Touch: SDA=GPIO3, SCL=GPIO2, IRQ=GPIO21.
+        // Keep the driver even if the first read fails — the chip often starts asleep.
         let touch = match I2c::new(
             peripherals.I2C0,
             I2cConfig::default().with_frequency(Rate::from_khz(400)),
@@ -92,16 +93,17 @@ impl App {
             Ok(i2c) => {
                 let i2c = i2c.with_sda(peripherals.GPIO3).with_scl(peripherals.GPIO2);
                 let mut touch = Cst816Touch::new(i2c);
-                match touch.read() {
-                    Ok(_) => {
-                        esp_println::println!("Touch: CST816 ready");
-                        Some(touch)
-                    }
-                    Err(_) => {
-                        esp_println::println!("Touch: CST816 not found (non-touch board?)");
-                        None
-                    }
+                match touch.disable_auto_sleep() {
+                    Ok(()) => esp_println::println!("Touch: auto-sleep disabled"),
+                    Err(_) => esp_println::println!("Touch: auto-sleep disable failed (will retry via polls)"),
                 }
+                match touch.read() {
+                    Ok(_) => esp_println::println!("Touch: CST816 ready (tap to cycle behavior)"),
+                    Err(_) => esp_println::println!(
+                        "Touch: probe failed at boot; taps may still work after contact"
+                    ),
+                }
+                Some(touch)
             }
             Err(_) => {
                 esp_println::println!("Touch: I2C init failed");
@@ -109,9 +111,10 @@ impl App {
             }
         };
 
-        // GPIO21 is the touch IRQ on the touch board; also useful as a press edge.
+        // BOOT button (GPIO0) as a secondary cycle input.
+        // GPIO21 is the CST816 IRQ — do not claim it as a GPIO button on touch boards.
         let button = Some(Button::new(Input::new(
-            peripherals.GPIO21,
+            peripherals.GPIO0,
             InputConfig::default().with_pull(Pull::Up),
         )));
 
@@ -126,6 +129,9 @@ impl App {
 
     pub fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
+        esp_println::println!(
+            "Tap (or BOOT): walk → idle → jump → crouch → begging → knockback → tumble"
+        );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);
 
@@ -136,7 +142,7 @@ impl App {
             last_tick = frame_start;
             let delta_ms = elapsed.min(MAX_DELTA_MS).max(1);
 
-            // Read inputs (touch, buttons) - cycle behavior on request
+            // Touch tap or BOOT button → next behavior.
             let mut cycle_requested = false;
             if let Some(ref mut touch) = self.touch {
                 if touch.poll_pressed() {

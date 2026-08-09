@@ -1,5 +1,7 @@
 //! Stick figure joint and limb geometry.
 
+use crate::layer::LayerId;
+
 /// Pixels above the bottom of the display for the floor line.
 const FLOOR_MARGIN: i32 = 18;
 
@@ -7,9 +9,30 @@ const FLOOR_MARGIN: i32 = 18;
 pub const THIGH_LEN: i32 = 15;
 pub const SHIN_LEN: i32 = 13;
 
+/// Standing pose: head-center distance above the feet (`y`).
+pub const HEAD_CENTER_ABOVE_FEET: i32 = 58;
+
 /// Y coordinate of the floor (feet contact line).
 pub fn floor_y() -> i32 {
     crate::DISPLAY_HEIGHT as i32 - FLOOR_MARGIN
+}
+
+/// Feet `y` so the standing head center sits just above the screen midline.
+pub fn jump_apex_foot_y(display_height: i32) -> i32 {
+    let head_target = display_height / 2 - 6;
+    head_target + HEAD_CENTER_ABOVE_FEET
+}
+
+/// How a non-zero [`StickmanState::roll_deg`] should be drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RollMode {
+    /// Upright / ignore roll.
+    #[default]
+    None,
+    /// Front-facing spinning tuck (knockback).
+    Knockback,
+    /// Side-profile forward flip with limbs folded to the torso.
+    Tumbling,
 }
 
 /// Stick figure animation/model state.
@@ -25,6 +48,16 @@ pub struct StickmanState {
     pub leg_phase: u32,
     /// Arm swing phase (0..100)
     pub arm_phase: u32,
+    /// Crouch amount 0..=100 (0 = stand, 100 = full crouch).
+    pub crouch: u8,
+    /// When crouched: arms reach forward (begging) vs hang by the sides.
+    pub begging: bool,
+    /// Body roll in degrees (0..360) for knockback / tumbling.
+    pub roll_deg: i32,
+    /// Selects knockback vs side-profile tumble rendering.
+    pub roll_mode: RollMode,
+    /// Depth layer: [`LayerId::Middle`] or [`LayerId::Foreground`].
+    pub layer: LayerId,
 }
 
 impl Default for StickmanState {
@@ -35,6 +68,11 @@ impl Default for StickmanState {
             facing_left: false,
             leg_phase: 0,
             arm_phase: 0,
+            crouch: 0,
+            begging: false,
+            roll_deg: 0,
+            roll_mode: RollMode::None,
+            layer: LayerId::Middle,
         }
     }
 }
@@ -62,6 +100,19 @@ pub fn sin_cos_deg_milli(deg: i32) -> (i32, i32) {
     let s = sin_deg_milli(deg);
     let c = sin_deg_milli(deg + 90);
     (s, c)
+}
+
+/// Rotate `p` around `origin` by `deg` degrees clockwise (screen y-down).
+pub fn rotate_point_cw(p: (i32, i32), origin: (i32, i32), deg: i32) -> (i32, i32) {
+    let s = sin_deg_milli(deg);
+    let c = sin_deg_milli(deg + 90);
+    let dx = p.0 - origin.0;
+    let dy = p.1 - origin.1;
+    // y-down clockwise: (0,-1) at +90° → (+1, 0).
+    (
+        origin.0 + (dx * c - dy * s) / 1000,
+        origin.1 + (dx * s + dy * c) / 1000,
+    )
 }
 
 fn sin_deg_milli(deg: i32) -> i32 {

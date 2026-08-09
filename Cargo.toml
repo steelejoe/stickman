@@ -17,7 +17,7 @@ device = [
     "dep:esp-bootloader-esp-idf",
     "dep:t-display-s3-amoled",
 ]
-sim = ["dep:minifb"]
+sim = ["dep:minifb", "dep:png"]
 
 [dependencies]
 embedded-graphics = "0.8"
@@ -37,6 +37,7 @@ t-display-s3-amoled = { path = "vendor/t-display-s3-amoled", optional = true }
 
 # Desktop simulation
 minifb = { version = "0.27", optional = true }
+png = { version = "0.17", optional = true }
 
 [[bin]]
 name = "stickman"

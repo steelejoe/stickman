@@ -1,4 +1,4 @@
-//! Physical button inputs (GPIO0 Boot, GPIO21).
+//! Physical button inputs (GPIO0 Boot).
 
 use embedded_hal::digital::InputPin;
 

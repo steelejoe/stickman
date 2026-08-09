@@ -124,9 +124,8 @@ stickman/
 
 ## Adding New Behaviors
 
-1. Implement the `Behavior` trait
-2. Add a variant to `BehaviorId`
-3. Register in `BehaviorManager` (order, switch_to)
+1. Implement the `Behavior` trait in `src/behavior/<name>.rs`
+2. Add one line to the `behaviors!` list in `src/behavior/plugin.rs` (cycle order)
 
 ## References
 
