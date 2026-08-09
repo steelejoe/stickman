@@ -1,0 +1,49 @@
+[package]
+name = "stickman"
+version = "0.1.0"
+edition = "2021"
+authors = ["stickman"]
+description = "Tamagotchi-like stick figure game for LilyGo T-Display-S3 AMOLED Touch"
+license = "MIT OR Apache-2.0"
+default-run = "stickman"
+
+[features]
+default = ["device"]
+device = [
+    "dep:esp-hal",
+    "dep:esp-backtrace",
+    "dep:esp-println",
+    "dep:esp-alloc",
+    "dep:esp-bootloader-esp-idf",
+    "dep:t-display-s3-amoled",
+]
+sim = ["dep:minifb"]
+
+[dependencies]
+embedded-graphics = "0.8"
+embedded-hal = "1.0"
+
+# Device (ESP32-S3) dependencies
+esp-hal = { version = "1.0.0", optional = true, features = ["esp32s3", "unstable"] }
+esp-backtrace = { version = "0.18.1", optional = true, features = [
+    "esp32s3",
+    "panic-handler",
+    "println",
+] }
+esp-println = { version = "0.16.1", optional = true, default-features = false, features = ["esp32s3", "uart"] }
+esp-alloc = { version = "0.9.0", optional = true }
+esp-bootloader-esp-idf = { version = "0.4.0", optional = true, features = ["esp32s3"] }
+t-display-s3-amoled = { path = "vendor/t-display-s3-amoled", optional = true }
+
+# Desktop simulation
+minifb = { version = "0.27", optional = true }
+
+[[bin]]
+name = "stickman"
+path = "src/main.rs"
+required-features = ["device"]
+
+[[bin]]
+name = "stickman-sim"
+path = "src/bin/sim.rs"
+required-features = ["sim"]

@@ -1,0 +1,8 @@
+/target
+Cargo.lock
+*.swp
+*.swo
+.env
+.idea/
+.vscode/
+*.iml
