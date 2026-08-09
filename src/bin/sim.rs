@@ -1,8 +1,8 @@
 //! Desktop simulation: windowed stickman with keyboard/mouse input.
 //!
 //! Input mapping:
-//!   Spacebar          → GPIO21 button (cycle behavior)
-//!   Left mouse click  → touch tap (cycle behavior)
+//!   Spacebar          → BOOT button (cycle behavior)
+//!   Left mouse click  → touch tap (left/right: face, center: cycle)
 //!   Escape / close    → quit
 //!
 //! Background: loads `assets/background.png` (preferred) or
@@ -12,7 +12,7 @@ use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{OriginDimensions, Size};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use minifb::{Key, MouseButton, Scale, Window, WindowOptions};
+use minifb::{Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
 use stickman::assets::{rgb888_to_rgb565_be, Rgb565Image};
 use stickman::game::Game;
 use stickman::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
@@ -196,7 +196,7 @@ fn main() {
     let height = DISPLAY_HEIGHT as usize;
 
     let mut window = Window::new(
-        "Stickman Sim — Space/Click: cycle behavior · Esc: quit",
+        "Stickman Sim — Click L/R face · Center/Space cycle · Esc quit",
         width,
         height,
         WindowOptions {
@@ -229,8 +229,8 @@ fn main() {
     let mut prev_mouse = false;
 
     println!("Stickman simulation running.");
-    println!("  Spacebar         → cycle behavior (GPIO21 button)");
-    println!("  Left mouse click → cycle behavior (touch tap)");
+    println!("  Spacebar         → cycle behavior (BOOT button)");
+    println!("  Left mouse click → left/right face, center cycle (touch)");
     println!("  Escape / close   → quit");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -240,14 +240,18 @@ fn main() {
         let delta_ms = elapsed.as_millis().min(MAX_DELTA_MS as u128) as u64;
 
         let space = window.is_key_down(Key::Space);
-        let mouse = window.get_mouse_down(MouseButton::Left);
-        let cycle = (space && !prev_space) || (mouse && !prev_mouse);
-        prev_space = space;
-        prev_mouse = mouse;
-
-        if cycle {
+        if space && !prev_space {
             game.on_cycle_input();
         }
+        prev_space = space;
+
+        let mouse = window.get_mouse_down(MouseButton::Left);
+        if mouse && !prev_mouse {
+            if let Some((x, _)) = window.get_mouse_pos(MouseMode::Clamp) {
+                game.on_tap(x as u32);
+            }
+        }
+        prev_mouse = mouse;
 
         game.update(delta_ms);
         // Incremental draw: erase previous pose + dirty floor restore (no full clear).

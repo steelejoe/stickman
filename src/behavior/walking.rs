@@ -53,6 +53,8 @@ impl Behavior for WalkingBehavior {
         s.y = geometry::floor_y();
         s.crouch = 0;
         s.begging = false;
+        s.sword_stance = false;
+        s.sword_stab = 0;
         s.roll_deg = 0;
         s.roll_mode = geometry::RollMode::None;
 

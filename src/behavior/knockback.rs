@@ -49,6 +49,8 @@ impl Behavior for KnockbackBehavior {
         s.y = geometry::floor_y();
         s.crouch = 0;
         s.begging = false;
+        s.sword_stance = false;
+        s.sword_stab = 0;
         s.roll_mode = RollMode::Knockback;
         s.roll_deg = (s.leg_phase as i32 * 360) / 100;
 

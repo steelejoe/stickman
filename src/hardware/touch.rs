@@ -1,8 +1,9 @@
 //! CST816x capacitive touch controller via I2C.
 //!
 //! LilyGo T-Display-S3 AMOLED Touch (1.91"): SDA=GPIO3, SCL=GPIO2, IRQ=GPIO21.
-//! Taps cycle the active behavior.
+//! Tap zones: left third faces left, right third faces right, center cycles behavior.
 
+use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embedded_hal::i2c::I2c;
 
 /// CST816 I2C address
@@ -13,7 +14,7 @@ const REG_POINTS: u8 = 0x02;
 /// Write `0xFF` here to keep the chip from entering auto-sleep (no RST pin on this board).
 const REG_AUTOSLEEP: u8 = 0xFE;
 
-/// Touch point data
+/// Touch point data in display coordinates (landscape 536×240).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TouchPoint {
     pub x: u16,
@@ -45,6 +46,9 @@ where
 
     /// Read current touch point, if any.
     /// Reads registers 0x02-0x06: points, XH, XL, YH, YL.
+    ///
+    /// Raw CST816 coords are panel-native portrait (≈240×536). Mapped here to
+    /// display space for LandscapeFlipped (536×240).
     pub fn read(&mut self) -> Result<TouchPoint, I2C::Error> {
         let mut buf = [0u8; 5];
         self.i2c.write_read(CST816_ADDR, &[REG_POINTS], &mut buf)?;
@@ -54,8 +58,9 @@ where
         let yh = buf[3];
         let yl = buf[4];
 
-        let x = ((xh as u16 & 0x0F) << 8) | xl as u16;
-        let y = ((yh as u16 & 0x0F) << 8) | yl as u16;
+        let raw_x = ((xh as u16 & 0x0F) << 8) | xl as u16;
+        let raw_y = ((yh as u16 & 0x0F) << 8) | yl as u16;
+        let (x, y) = map_to_display(raw_x, raw_y);
 
         Ok(TouchPoint {
             x,
@@ -64,11 +69,27 @@ where
         })
     }
 
-    /// Returns true on the rising edge of a touch (finger just down).
-    pub fn poll_pressed(&mut self) -> bool {
-        let pressed = self.read().map(|p| p.pressed).unwrap_or(false);
-        let edge = pressed && !self.prev_pressed;
-        self.prev_pressed = pressed;
-        edge
+    /// Rising-edge tap with display coordinates, if any.
+    pub fn poll_tap(&mut self) -> Option<TouchPoint> {
+        let point = self.read().ok()?;
+        let edge = point.pressed && !self.prev_pressed;
+        self.prev_pressed = point.pressed;
+        if edge {
+            Some(point)
+        } else {
+            None
+        }
     }
+}
+
+/// Map panel-native CST816 coords to landscape display pixels.
+fn map_to_display(raw_x: u16, raw_y: u16) -> (u16, u16) {
+    // LandscapeFlipped: visual X runs along the panel's long (Y) axis.
+    let x = raw_y.min(DISPLAY_WIDTH as u16 - 1);
+    let y = if raw_x < DISPLAY_HEIGHT as u16 {
+        (DISPLAY_HEIGHT as u16 - 1).saturating_sub(raw_x)
+    } else {
+        (DISPLAY_HEIGHT as u16 - 1).min(raw_x)
+    };
+    (x, y)
 }

@@ -1,4 +1,4 @@
-//! Crouching behavior — bent-knee crouch with arms by the sides.
+//! Searching behavior — crouched, glancing left↔right twice per cycle.
 
 use super::plugin::{Behavior, BehaviorId, UpdateContext};
 use crate::stickman::geometry::{self, StickmanState};
@@ -6,21 +6,39 @@ use crate::stickman::render;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::pixelcolor::Rgb565;
 
-pub struct CrouchingBehavior;
+/// Pause between facing changes.
+const FACE_PAUSE_MS: u32 = 500;
 
-impl CrouchingBehavior {
+/// Facing steps for one search: left → right → left → right.
+const FACE_STEPS: u32 = 4;
+
+pub struct SearchingBehavior {
+    elapsed_ms: u32,
+}
+
+impl SearchingBehavior {
     pub fn new() -> Self {
-        Self
+        Self { elapsed_ms: 0 }
     }
 }
 
-impl Behavior for CrouchingBehavior {
+impl Behavior for SearchingBehavior {
     fn id(&self) -> BehaviorId {
-        BehaviorId::Crouching
+        BehaviorId::Searching
     }
 
     fn update(&mut self, ctx: &mut UpdateContext) -> Option<BehaviorId> {
         let s = &mut *ctx.stickman_state;
+
+        self.elapsed_ms = self
+            .elapsed_ms
+            .saturating_add(ctx.delta_ms as u32)
+            % (FACE_PAUSE_MS * FACE_STEPS);
+
+        // Even steps face left; odd steps face right — two left→right switches.
+        let step = self.elapsed_ms / FACE_PAUSE_MS;
+        s.facing_left = step % 2 == 0;
+
         s.y = geometry::floor_y();
         s.crouch = 100;
         s.begging = false;

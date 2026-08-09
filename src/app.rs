@@ -98,7 +98,9 @@ impl App {
                     Err(_) => esp_println::println!("Touch: auto-sleep disable failed (will retry via polls)"),
                 }
                 match touch.read() {
-                    Ok(_) => esp_println::println!("Touch: CST816 ready (tap to cycle behavior)"),
+                    Ok(_) => esp_println::println!(
+                        "Touch: CST816 ready (left/right: face, center: cycle)"
+                    ),
                     Err(_) => esp_println::println!(
                         "Touch: probe failed at boot; taps may still work after contact"
                     ),
@@ -130,7 +132,7 @@ impl App {
     pub fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
-            "Tap (or BOOT): walk → idle → jump → crouch → begging → knockback → tumble"
+            "Tap left/right to face; center (or BOOT) cycles: walk → idle → jump → crouch → search → begging → sword → stab → crouch-sword → crouch-stab → knockback → tumble"
         );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);
@@ -142,22 +144,19 @@ impl App {
             last_tick = frame_start;
             let delta_ms = elapsed.min(MAX_DELTA_MS).max(1);
 
-            // Touch tap or BOOT button → next behavior.
-            let mut cycle_requested = false;
+            // Positioned touch tap: left/right face, center cycles.
             if let Some(ref mut touch) = self.touch {
-                if touch.poll_pressed() {
-                    cycle_requested = true;
-                    esp_println::println!("Touch: cycle behavior");
+                if let Some(point) = touch.poll_tap() {
+                    esp_println::println!("Touch: ({}, {})", point.x, point.y);
+                    self.game.on_tap(point.x as u32);
                 }
             }
+            // BOOT button → next behavior (no position).
             if let Some(ref mut btn) = self.button {
                 if btn.poll_pressed() {
-                    cycle_requested = true;
                     esp_println::println!("Button: cycle behavior");
+                    self.game.on_cycle_input();
                 }
-            }
-            if cycle_requested {
-                self.game.on_cycle_input();
             }
 
             self.game.update(delta_ms);

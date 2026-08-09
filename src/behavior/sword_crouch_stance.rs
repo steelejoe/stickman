@@ -1,4 +1,4 @@
-//! Crouching behavior — bent-knee crouch with arms by the sides.
+//! Sword crouch stance — crouched one-handed sword ready pose.
 
 use super::plugin::{Behavior, BehaviorId, UpdateContext};
 use crate::stickman::geometry::{self, StickmanState};
@@ -6,17 +6,17 @@ use crate::stickman::render;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::pixelcolor::Rgb565;
 
-pub struct CrouchingBehavior;
+pub struct SwordCrouchStanceBehavior;
 
-impl CrouchingBehavior {
+impl SwordCrouchStanceBehavior {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Behavior for CrouchingBehavior {
+impl Behavior for SwordCrouchStanceBehavior {
     fn id(&self) -> BehaviorId {
-        BehaviorId::Crouching
+        BehaviorId::SwordCrouchStance
     }
 
     fn update(&mut self, ctx: &mut UpdateContext) -> Option<BehaviorId> {
@@ -24,7 +24,7 @@ impl Behavior for CrouchingBehavior {
         s.y = geometry::floor_y();
         s.crouch = 100;
         s.begging = false;
-        s.sword_stance = false;
+        s.sword_stance = true;
         s.sword_stab = 0;
         s.roll_deg = 0;
         s.roll_mode = geometry::RollMode::None;

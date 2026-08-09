@@ -50,6 +50,8 @@ impl Behavior for TumblingBehavior {
         s.y = geometry::floor_y();
         s.crouch = 0;
         s.begging = false;
+        s.sword_stance = false;
+        s.sword_stab = 0;
         s.roll_mode = RollMode::Tumbling;
         // One full flip per gait cycle.
         s.roll_deg = (s.leg_phase as i32 * 360) / 100;

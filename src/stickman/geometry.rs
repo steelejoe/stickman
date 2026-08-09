@@ -52,6 +52,10 @@ pub struct StickmanState {
     pub crouch: u8,
     /// When crouched: arms reach forward (begging) vs hang by the sides.
     pub begging: bool,
+    /// Standing one-handed sword ready stance.
+    pub sword_stance: bool,
+    /// Sword stab extension 0..=100 (0 = ready stance, 100 = full horizontal thrust).
+    pub sword_stab: u8,
     /// Body roll in degrees (0..360) for knockback / tumbling.
     pub roll_deg: i32,
     /// Selects knockback vs side-profile tumble rendering.
@@ -70,6 +74,8 @@ impl Default for StickmanState {
             arm_phase: 0,
             crouch: 0,
             begging: false,
+            sword_stance: false,
+            sword_stab: 0,
             roll_deg: 0,
             roll_mode: RollMode::None,
             layer: LayerId::Middle,

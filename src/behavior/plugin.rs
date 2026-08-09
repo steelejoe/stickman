@@ -91,7 +91,12 @@ behaviors! {
     (Idle, idle, IdleBehavior),
     (Jumping, jumping, JumpingBehavior),
     (Crouching, crouching, CrouchingBehavior),
+    (Searching, searching, SearchingBehavior),
     (Begging, begging, BeggingBehavior),
+    (SwordStance, sword_stance, SwordStanceBehavior),
+    (SwordStab, sword_stab, SwordStabBehavior),
+    (SwordCrouchStance, sword_crouch_stance, SwordCrouchStanceBehavior),
+    (SwordCrouchStab, sword_crouch_stab, SwordCrouchStabBehavior),
     (Knockback, knockback, KnockbackBehavior),
     (Tumbling, tumbling, TumblingBehavior),
 }

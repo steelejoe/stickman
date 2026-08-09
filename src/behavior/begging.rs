@@ -24,6 +24,8 @@ impl Behavior for BeggingBehavior {
         s.y = geometry::floor_y();
         s.crouch = 100;
         s.begging = true;
+        s.sword_stance = false;
+        s.sword_stab = 0;
         s.roll_deg = 0;
         s.roll_mode = geometry::RollMode::None;
         s.leg_phase = 0;

@@ -5,9 +5,30 @@ use crate::behavior::plugin::BehaviorManager;
 use crate::dirty::{self, DIRTY_BUF_LEN};
 use crate::layer;
 use crate::stickman::geometry::StickmanState;
+use crate::DISPLAY_WIDTH;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::RgbColor;
+
+/// Action selected by a screen tap's horizontal position.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TapAction {
+    FaceLeft,
+    FaceRight,
+    Cycle,
+}
+
+/// Map a display X coordinate to a left / center / right tap action.
+pub fn tap_action_for_x(x: u32, width: u32) -> TapAction {
+    let third = width / 3;
+    if x < third {
+        TapAction::FaceLeft
+    } else if x < third * 2 {
+        TapAction::Cycle
+    } else {
+        TapAction::FaceRight
+    }
+}
 
 /// Platform-independent stickman game.
 pub struct Game {
@@ -47,9 +68,18 @@ impl Game {
         self.background.is_some()
     }
 
-    /// Cycle to the next behavior (device button / touch, or sim input).
+    /// Cycle to the next behavior (device button / center tap, or sim input).
     pub fn on_cycle_input(&mut self) {
         self.behavior_mgr.cycle_next();
+    }
+
+    /// Handle a positioned tap: left/right thirds change facing; center cycles.
+    pub fn on_tap(&mut self, x: u32) {
+        match tap_action_for_x(x, DISPLAY_WIDTH) {
+            TapAction::FaceLeft => self.stickman_state.facing_left = true,
+            TapAction::FaceRight => self.stickman_state.facing_left = false,
+            TapAction::Cycle => self.on_cycle_input(),
+        }
     }
 
     pub fn update(&mut self, delta_ms: u64) {
