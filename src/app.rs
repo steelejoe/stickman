@@ -1,6 +1,6 @@
 //! Application state, main loop, and input handling (device build).
 
-use crate::game::Game;
+use crate::game::{tap_action_for_x, Game};
 use crate::hardware::buttons::Button;
 use crate::hardware::touch::Cst816Touch;
 use embedded_graphics::pixelcolor::Rgb565;
@@ -147,7 +147,13 @@ impl App {
             // Positioned touch tap: left/right face, center cycles.
             if let Some(ref mut touch) = self.touch {
                 if let Some(point) = touch.poll_tap() {
-                    esp_println::println!("Touch: ({}, {})", point.x, point.y);
+                    let action = tap_action_for_x(point.x as u32, DISPLAY_WIDTH);
+                    esp_println::println!(
+                        "Touch: ({}, {}) -> {:?}",
+                        point.x,
+                        point.y,
+                        action
+                    );
                     self.game.on_tap(point.x as u32);
                 }
             }

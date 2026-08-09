@@ -72,12 +72,10 @@ pub fn stickman_dirty_rect(state: &StickmanState) -> Rectangle {
             Size::new((R * 2) as u32, (R * 2) as u32),
         );
     }
-    // One-handed sword / thrust reaches farther forward than a normal stance.
-    let half_w = if state.sword_stance {
-        52 + state.sword_stab.min(100) as i32 * 14 / 100
-    } else {
-        44
-    };
+    // Sword poses: use a stable max extent (stance + full lunge/thrust) so
+    // adjacent stab frames share one dirty tile and never trip the oversized
+    // erase-then-draw path.
+    let half_w = if state.sword_stance { 76 } else { 44 };
     // Standing head is ~64px above feet; jump/crouch stay within this pad.
     const ABOVE: i32 = HEAD_CENTER_ABOVE_FEET + 12;
     const BELOW: i32 = 4;

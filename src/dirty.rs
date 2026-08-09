@@ -15,9 +15,10 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 
-/// Max dirty tile stored in [`crate::game::Game`] (≈40 KiB).
-/// Tall enough for a standing↔jump-apex union without splitting.
-pub const DIRTY_MAX_W: u32 = 128;
+/// Max dirty tile stored in [`crate::game::Game`] (≈50 KiB).
+/// Wide enough for sword-stab lunge unions without falling back to
+/// erase-then-draw (which flashes on the AMOLED).
+pub const DIRTY_MAX_W: u32 = 160;
 pub const DIRTY_MAX_H: u32 = 160;
 pub const DIRTY_BUF_LEN: usize = (DIRTY_MAX_W * DIRTY_MAX_H) as usize;
 

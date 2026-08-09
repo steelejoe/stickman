@@ -47,7 +47,8 @@ where
     /// Read current touch point, if any.
     /// Reads registers 0x02-0x06: points, XH, XL, YH, YL.
     ///
-    /// Raw CST816 coords are panel-native portrait (≈240×536). Mapped here to
+    /// On this board CST816 reports landscape-aligned points with X along the
+    /// long edge (~0..535) and Y along the short edge (~0..239). Mapped to
     /// display space for LandscapeFlipped (536×240).
     pub fn read(&mut self) -> Result<TouchPoint, I2C::Error> {
         let mut buf = [0u8; 5];
@@ -82,14 +83,11 @@ where
     }
 }
 
-/// Map panel-native CST816 coords to landscape display pixels.
+/// Map CST816 coords to landscape display pixels (536×240).
 fn map_to_display(raw_x: u16, raw_y: u16) -> (u16, u16) {
-    // LandscapeFlipped: visual X runs along the panel's long (Y) axis.
-    let x = raw_y.min(DISPLAY_WIDTH as u16 - 1);
-    let y = if raw_x < DISPLAY_HEIGHT as u16 {
-        (DISPLAY_HEIGHT as u16 - 1).saturating_sub(raw_x)
-    } else {
-        (DISPLAY_HEIGHT as u16 - 1).min(raw_x)
-    };
+    // X is already in panel width units (~0..535). Invert for LandscapeFlipped.
+    // (Older code scaled as if max were 239, which crushed the center/left into x=0.)
+    let x = (DISPLAY_WIDTH as u16 - 1).saturating_sub(raw_x.min(DISPLAY_WIDTH as u16 - 1));
+    let y = raw_y.min(DISPLAY_HEIGHT as u16 - 1);
     (x, y)
 }
