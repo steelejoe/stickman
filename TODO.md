@@ -59,6 +59,11 @@ TODOs:
 - [ ] Behaviors that control scale (and richer rotation beyond roll modes)
 - [ ] Optional: attach behaviors to non-stickman images / sprites
 - [ ] Behavior self-transitions / timed sequences (beyond tap-to-cycle)
+- [ ] Turn behaviors into a tiny language
+- [ ] Add randomness to the behaviors
+- [ ] Add collision support (maybe calculated when drawing for more precision)
+- [ ] Add collision objects
+- [ ] Add support for configuration (file over usb, wifi web site, ???)
 
 ## Tooling and hardware cleanup
 
@@ -68,3 +73,4 @@ TODOs:
 - [ ] Add `scripts/check-env.sh` to verify `cargo`, `rustup`, `espflash`, and the ESP toolchain resolve
 - [ ] Add CI for device (`make device`) and simulation (`make build-sim`) builds
 - [ ] Move display init out of `src/app.rs` into `src/hardware/display.rs` (currently a stub)
+
