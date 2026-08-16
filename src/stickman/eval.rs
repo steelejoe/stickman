@@ -9,6 +9,9 @@ use embedded_graphics::geometry::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
 
 /// Sample `actor`'s clip into `out` (FK + optional spin).
+///
+/// After FK, the pose is lifted so the body does not sit below `actor.y`
+/// (the floor, or the aerial foot line while jumping).
 pub fn sample(actor: &Actor, out: &mut PoseScratch) {
     let clip = library::clip(actor.clip);
     let species = clip.species;
@@ -97,6 +100,42 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
             out.tip[i] = Point::new(t.0, t.1);
         }
     }
+
+    plant_on_baseline(out, root.y);
+}
+
+/// Lift the pose so the body does not sit below `baseline_y` (never lower it).
+/// Sword / fist / guard are ignored so a low blade does not levitate the figure.
+fn plant_on_baseline(out: &mut PoseScratch, baseline_y: i32) {
+    let Some(lowest) = contact_lowest_y(out) else {
+        return;
+    };
+    let dy = lowest - baseline_y;
+    if dy <= 0 {
+        return;
+    }
+    for i in 0..out.n {
+        out.origin[i].y -= dy;
+        out.tip[i].y -= dy;
+    }
+}
+
+fn contact_lowest_y(out: &PoseScratch) -> Option<i32> {
+    let n = out.n.min(library::FIST as usize);
+    if n == 0 {
+        return None;
+    }
+    let mut lowest = i32::MIN;
+    for i in 0..n {
+        lowest = lowest.max(out.origin[i].y).max(out.tip[i].y);
+        if let Some(species) = out.species {
+            if let BoneKind::Circle { diameter } = species.bones[i].kind {
+                let r = (diameter as i32 + 1) / 2;
+                lowest = lowest.max(out.tip[i].y + r);
+            }
+        }
+    }
+    Some(lowest)
 }
 
 fn joint_tip(origin: Point, angle_deg: i32, length: i32, dir: i32) -> Point {
@@ -298,5 +337,58 @@ mod tests {
             assert_eq!(dx_l, -dx_r, "bone {i}");
             assert_eq!(left.tip[i].y, right.tip[i].y, "bone {i}");
         }
+    }
+
+    const ALL_CLIPS: [crate::stickman::ir::ClipId; 11] = [
+        crate::stickman::ir::ClipId::Walk,
+        crate::stickman::ir::ClipId::Idle,
+        crate::stickman::ir::ClipId::Jump,
+        crate::stickman::ir::ClipId::Crouch,
+        crate::stickman::ir::ClipId::Beg,
+        crate::stickman::ir::ClipId::SwordStance,
+        crate::stickman::ir::ClipId::SwordStab,
+        crate::stickman::ir::ClipId::SwordCrouchStance,
+        crate::stickman::ir::ClipId::SwordCrouchStab,
+        crate::stickman::ir::ClipId::Knockback,
+        crate::stickman::ir::ClipId::Tumble,
+    ];
+
+    fn sample_at(clip: crate::stickman::ir::ClipId, time_ms: u32) -> PoseScratch {
+        let mut actor = Actor::default();
+        actor.play(clip);
+        actor.x = 100;
+        actor.y = 200;
+        actor.time_ms = time_ms;
+        let mut pose = PoseScratch::new();
+        sample(&actor, &mut pose);
+        pose
+    }
+
+    #[test]
+    fn clips_do_not_dip_below_baseline() {
+        for clip_id in ALL_CLIPS {
+            let clip = library::clip(clip_id);
+            let step = 50u32.min(clip.duration_ms.max(1) as u32);
+            let mut t = 0u32;
+            while t <= clip.duration_ms as u32 {
+                let pose = sample_at(clip_id, t);
+                let lowest = contact_lowest_y(&pose).expect("contact");
+                assert!(
+                    lowest <= 200,
+                    "{clip_id:?} t={t}: contact y {lowest} below baseline 200"
+                );
+                t += step;
+            }
+        }
+    }
+
+    #[test]
+    fn crouched_sword_plants_on_baseline() {
+        let pose = sample_at(crate::stickman::ir::ClipId::SwordCrouchStance, 0);
+        let lowest = contact_lowest_y(&pose).expect("contact");
+        assert_eq!(lowest, 200);
+        let shin_a = pose.tip[library::SHIN_A as usize].y;
+        let shin_b = pose.tip[library::SHIN_B as usize].y;
+        assert!(shin_a.max(shin_b) <= 200);
     }
 }
