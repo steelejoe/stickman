@@ -132,7 +132,7 @@ impl App {
     pub fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
-            "Tap left/right to face; center tap picks a random other behavior; BOOT cycles: walk → idle → jump → crouch → search → begging → sword → stab → crouch-sword → crouch-stab → knockback → tumble"
+            "Tap left/right to face; center tap picks a random other behavior (resets auto-switch); BOOT cycles: walk → idle → jump → crouch → search → begging → sword → stab → crouch-sword → crouch-stab → knockback → tumble. Behaviors also change on their own within 5s."
         );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);

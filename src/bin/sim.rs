@@ -231,6 +231,7 @@ fn main() {
     println!("Stickman simulation running.");
     println!("  Spacebar         → cycle behavior (BOOT button)");
     println!("  Left mouse click → left/right face, center random behavior (touch)");
+    println!("  Auto             → random other behavior within 5s (input resets the timer)");
     println!("  Escape / close   → quit");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {

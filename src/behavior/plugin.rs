@@ -14,6 +14,10 @@ use crate::stickman::library;
 const MARGIN: i32 = 40;
 const FACE_PAUSE_MS: u32 = 500;
 const FACE_STEPS: u32 = 4;
+/// Auto-switch waits at least this long so a pose is visible.
+const AUTO_SWITCH_MIN_MS: u32 = 1000;
+/// Auto-switch never waits longer than this.
+const AUTO_SWITCH_MAX_MS: u32 = 5000;
 
 /// World-logic mode. Most clips are [`Loco::InPlace`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,16 +85,21 @@ pub struct BehaviorManager {
     rng: u32,
     /// Elapsed ms for [`Loco::Search`]; reset on switch.
     timer_ms: u32,
+    /// Ms until the next automatic random behavior switch.
+    switch_remain_ms: u32,
 }
 
 impl BehaviorManager {
     pub fn new() -> Self {
-        Self {
+        let mut this = Self {
             current: BehaviorId::Walking,
             index: 0,
             rng: 0xA5A5_5A5A,
             timer_ms: 0,
-        }
+            switch_remain_ms: AUTO_SWITCH_MAX_MS,
+        };
+        this.roll_auto_switch();
+        this
     }
 
     fn switch(&mut self, actor: &mut Actor, id: BehaviorId, index: usize) {
@@ -98,6 +107,12 @@ impl BehaviorManager {
         self.current = id;
         self.timer_ms = 0;
         actor.play(id.clip());
+        self.roll_auto_switch();
+    }
+
+    fn roll_auto_switch(&mut self) {
+        let span = AUTO_SWITCH_MAX_MS - AUTO_SWITCH_MIN_MS + 1;
+        self.switch_remain_ms = AUTO_SWITCH_MIN_MS + self.next_u32() % span;
     }
 
     pub fn cycle_next(&mut self, actor: &mut Actor) {
@@ -138,10 +153,15 @@ impl BehaviorManager {
 
     pub fn update(&mut self, delta_ms: u64, actor: &mut Actor) {
         self.mix_entropy(delta_ms as u32);
+        let dt = delta_ms as u32;
+        self.switch_remain_ms = self.switch_remain_ms.saturating_sub(dt);
+        if self.switch_remain_ms == 0 {
+            self.cycle_random(actor, dt);
+        }
         apply_loco(
             self.current.loco(),
             actor,
-            delta_ms as u32,
+            dt,
             crate::DISPLAY_WIDTH,
             crate::DISPLAY_HEIGHT,
             &mut self.timer_ms,
@@ -238,5 +258,51 @@ mod tests {
         assert_eq!(BehaviorId::Searching.clip(), ClipId::Crouch);
         assert_eq!(BehaviorId::Crouching.clip(), ClipId::Crouch);
         assert_ne!(BehaviorId::Searching.loco(), BehaviorId::Crouching.loco());
+    }
+
+    fn assert_auto_switch_in_range(ms: u32) {
+        assert!(
+            (AUTO_SWITCH_MIN_MS..=AUTO_SWITCH_MAX_MS).contains(&ms),
+            "auto-switch interval {ms} out of range"
+        );
+    }
+
+    #[test]
+    fn auto_switch_interval_is_at_most_5s() {
+        let mut mgr = BehaviorManager::new();
+        let mut actor = Actor::default();
+        assert_auto_switch_in_range(mgr.switch_remain_ms);
+        for i in 0..32 {
+            mgr.cycle_random(&mut actor, i as u32);
+            assert_auto_switch_in_range(mgr.switch_remain_ms);
+        }
+    }
+
+    #[test]
+    fn auto_switch_fires_when_timer_elapses() {
+        let mut mgr = BehaviorManager::new();
+        let mut actor = Actor::default();
+        let prev = mgr.index;
+        let remain = mgr.switch_remain_ms;
+        mgr.update((remain - 1) as u64, &mut actor);
+        assert_eq!(mgr.index, prev);
+        assert_eq!(mgr.switch_remain_ms, 1);
+        mgr.update(1, &mut actor);
+        assert_ne!(mgr.index, prev);
+        assert_auto_switch_in_range(mgr.switch_remain_ms);
+    }
+
+    #[test]
+    fn manual_cycle_resets_auto_switch_timer() {
+        let mut mgr = BehaviorManager::new();
+        let mut actor = Actor::default();
+        mgr.update((mgr.switch_remain_ms - 1) as u64, &mut actor);
+        assert_eq!(mgr.switch_remain_ms, 1);
+        mgr.cycle_next(&mut actor);
+        assert_auto_switch_in_range(mgr.switch_remain_ms);
+        mgr.update((mgr.switch_remain_ms - 1) as u64, &mut actor);
+        assert_eq!(mgr.switch_remain_ms, 1);
+        mgr.cycle_random(&mut actor, 7);
+        assert_auto_switch_in_range(mgr.switch_remain_ms);
     }
 }
