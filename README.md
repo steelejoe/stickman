@@ -7,7 +7,7 @@ Core logic is shared between the **device firmware** and a **desktop simulation*
 ## Features
 
 - **Animated stick figure** drawn with embedded-graphics
-- **Plugin behavior system** - configurable behaviors via traits
+- **Table-driven behaviors** - clip + locomotion (walk, idle, jump, …)
 - **Walking behavior** - stick figure walks back and forth with screen-edge bounce
 - **Idle behavior** - standing still
 - **Touch input** - tap screen to cycle behaviors (when CST816 I2C wired)
@@ -118,14 +118,17 @@ stickman/
 │   ├── game.rs          # Shared game loop (device + sim)
 │   ├── app.rs           # Device display/input wiring
 │   ├── hardware/        # Display, touch, buttons
-│   ├── stickman/        # Geometry and rendering
-│   └── behavior/        # Plugin behaviors (walking, idle)
+│   ├── stickman/        # Species rig, clips, eval, stroke render
+│   └── behavior/        # Behavior table (clip + locomotion)
 ```
 
 ## Adding New Behaviors
 
-1. Implement the `Behavior` trait in `src/behavior/<name>.rs`
-2. Add one line to the `behaviors!` list in `src/behavior/plugin.rs` (cycle order)
+1. Add a clip (keyed bone tracks) in `src/stickman/library.rs` and a `ClipId` if needed
+2. Add one row to `behaviors!` in `src/behavior/plugin.rs`: `(Name, ClipId, Loco)`
+3. Reuse an existing [`Loco`](src/behavior/plugin.rs) (`InPlace`, `WalkBounce`, …) or add a variant there if the world logic is new
+
+Drawing is not per-behavior: `Game` evaluates the actor's clip into strokes.
 
 ## References
 

@@ -1,6 +1,4 @@
-//! Stick figure joint and limb geometry.
-
-use crate::layer::LayerId;
+//! Stick figure joint math (angles, stride, floor). Drawing lives in the clip IR.
 
 /// Pixels above the bottom of the display for the floor line.
 const FLOOR_MARGIN: i32 = 18;
@@ -21,66 +19,6 @@ pub fn floor_y() -> i32 {
 pub fn jump_apex_foot_y(display_height: i32) -> i32 {
     let head_target = display_height / 2 - 6;
     head_target + HEAD_CENTER_ABOVE_FEET
-}
-
-/// How a non-zero [`StickmanState::roll_deg`] should be drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum RollMode {
-    /// Upright / ignore roll.
-    #[default]
-    None,
-    /// Front-facing spinning tuck (knockback).
-    Knockback,
-    /// Side-profile forward flip with limbs folded to the torso.
-    Tumbling,
-}
-
-/// Stick figure animation/model state.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StickmanState {
-    /// X position (center of figure)
-    pub x: i32,
-    /// Y position (feet / floor contact level)
-    pub y: i32,
-    /// Facing left (true) or right (false)
-    pub facing_left: bool,
-    /// Walk cycle phase 0..2*PI (approximated as 0..100 for fixed-point)
-    pub leg_phase: u32,
-    /// Arm swing phase (0..100)
-    pub arm_phase: u32,
-    /// Crouch amount 0..=100 (0 = stand, 100 = full crouch).
-    pub crouch: u8,
-    /// When crouched: arms reach forward (begging) vs hang by the sides.
-    pub begging: bool,
-    /// Standing one-handed sword ready stance.
-    pub sword_stance: bool,
-    /// Sword stab extension 0..=100 (0 = ready stance, 100 = full horizontal thrust).
-    pub sword_stab: u8,
-    /// Body roll in degrees (0..360) for knockback / tumbling.
-    pub roll_deg: i32,
-    /// Selects knockback vs side-profile tumble rendering.
-    pub roll_mode: RollMode,
-    /// Depth layer: [`LayerId::Middle`] or [`LayerId::Foreground`].
-    pub layer: LayerId,
-}
-
-impl Default for StickmanState {
-    fn default() -> Self {
-        Self {
-            x: (crate::DISPLAY_WIDTH / 2) as i32,
-            y: floor_y(),
-            facing_left: false,
-            leg_phase: 0,
-            arm_phase: 0,
-            crouch: 0,
-            begging: false,
-            sword_stance: false,
-            sword_stab: 0,
-            roll_deg: 0,
-            roll_mode: RollMode::None,
-            layer: LayerId::Middle,
-        }
-    }
 }
 
 /// Approximate sin(phase) for phase in 0..100 ≡ 0..2π.
@@ -181,14 +119,4 @@ pub fn stride_length_px() -> i32 {
     // Separation peaks near phase 25 (and 75 with legs swapped).
     let step = (foot_x_rel(25, 0) - foot_x_rel(25, 50)).abs();
     2 * step
-}
-
-/// Shoulder / elbow angles (degrees from vertical) for one arm.
-/// Use offset 50 relative to the same-side leg so arms swing contralaterally.
-pub fn arm_joint_angles(phase: u32, phase_offset: u32) -> (i32, i32) {
-    let p = (phase + phase_offset) % 100;
-    let swing = phase_sin_milli(p);
-    let shoulder = swing * 28 / 1000;
-    let elbow = 18 + swing.unsigned_abs() as i32 * 14 / 1000;
-    (shoulder, elbow)
 }

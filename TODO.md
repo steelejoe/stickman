@@ -41,7 +41,7 @@ I am not sure how I want to handle behavior attachment. Maybe they can be generi
 Probably not though.
 
 Done so far:
-- Trait-based plugin system (`Behavior` + `behaviors!` enum dispatch in `plugin.rs`)
+- Table-driven behaviors (`behaviors!` in `plugin.rs`: clip + locomotion)
 - Cycle order: walk → idle → jump → crouch → begging → knockback → tumble
   - **Walking** — gait + edge bounce
   - **Idle** — standing still (static frame skip)
@@ -56,10 +56,10 @@ Done so far:
 TODOs:
 - [x] Add behavior system to the infrastructure
 - [x] Walking / idle / jump / crouch / begging / knockback / tumble behaviors
+- [x] Species + clip IR (bones in flash, clips key angles; behaviors direct world logic)
 - [ ] Behaviors that control scale (and richer rotation beyond roll modes)
 - [ ] Optional: attach behaviors to non-stickman images / sprites
 - [ ] Behavior self-transitions / timed sequences (beyond tap-to-cycle)
-- [ ] Turn behaviors into a tiny language
 - [x] Add randomness to the behaviors
 - [ ] Add collision support (maybe calculated when drawing for more precision)
 - [ ] Add collision objects

@@ -2,11 +2,12 @@
 //!
 //! The RM67162 `draw_iter` path issues a QSPI address setup per pixel, so
 //! erase-then-redraw is both slow and visibly flickery. Instead we compose the
-//! union of the previous/new stickman bounds into a RAM buffer and push it with
+//! union of the previous/new pose bounds into a RAM buffer and push it with
 //! a single [`DrawTarget::fill_contiguous`] (one window, streamed pixels).
 
 use crate::assets::Rgb565Image;
-use crate::stickman::geometry::{floor_y, StickmanState};
+use crate::stickman::geometry::floor_y;
+use crate::stickman::ir::{Actor, PoseScratch};
 use crate::stickman::render;
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embedded_graphics::draw_target::DrawTarget;
@@ -146,12 +147,13 @@ fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Option<&Rgb5
     }
 }
 
-/// Compose layer 0 (+ optional stickman) into `buf` for `area`, then `fill_contiguous`.
+/// Compose layer 0 (+ optional figure) into `buf` for `area`, then `fill_contiguous`.
 pub fn blit_composed_area<D>(
     display: &mut D,
     buf: &mut [Rgb565],
     area: Rectangle,
-    stickman: &StickmanState,
+    actor: &Actor,
+    pose: &PoseScratch,
     background: Option<&Rgb565Image<'_>>,
     draw_figure: bool,
 ) -> Result<(), D::Error>
@@ -172,27 +174,29 @@ where
     if draw_figure {
         let mut slice = SliceDisplay::new(tile, w, h);
         let mut view = slice.translated(Point::new(-area.top_left.x, -area.top_left.y));
-        let _ = render::draw_stickman(&mut view, stickman);
+        let _ = render::draw_actor(&mut view, actor, pose);
     }
 
     let tile = &buf[..need];
     display.fill_contiguous(&area, tile.iter().copied())
 }
 
-/// Update the stickman with a single contiguous display write (no erase hole).
-pub fn present_stickman_frame<D>(
+/// Update the figure with a single contiguous display write (no erase hole).
+pub fn present_actor_frame<D>(
     display: &mut D,
     dirty_buf: &mut [Rgb565; DIRTY_BUF_LEN],
-    prev: Option<&StickmanState>,
-    current: &StickmanState,
+    prev_rect: Option<Rectangle>,
+    actor: &Actor,
+    pose: &PoseScratch,
+    new_rect: Rectangle,
     background: Option<&Rgb565Image<'_>>,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    let new_rect = clamp_to_screen(render::stickman_dirty_rect(current));
-    let area = match prev {
-        Some(p) => clamp_to_screen(union_rects(render::stickman_dirty_rect(p), new_rect)),
+    let new_rect = clamp_to_screen(new_rect);
+    let area = match prev_rect {
+        Some(p) => clamp_to_screen(union_rects(p, new_rect)),
         None => new_rect,
     };
 
@@ -201,20 +205,19 @@ where
     }
 
     if area.size.width <= DIRTY_MAX_W && area.size.height <= DIRTY_MAX_H {
-        return blit_composed_area(display, dirty_buf, area, current, background, true);
+        return blit_composed_area(display, dirty_buf, area, actor, pose, background, true);
     }
 
-    // Oversized dirty region: restore previous tile, then present the new one.
-    if let Some(p) = prev {
-        let prev_rect = clamp_to_screen(render::stickman_dirty_rect(p));
+    if let Some(p) = prev_rect {
+        let prev_rect = clamp_to_screen(p);
         if prev_rect.size.width <= DIRTY_MAX_W && prev_rect.size.height <= DIRTY_MAX_H {
-            blit_composed_area(display, dirty_buf, prev_rect, current, background, false)?;
+            blit_composed_area(display, dirty_buf, prev_rect, actor, pose, background, false)?;
         } else if let Some(img) = background {
             img.blit_rect(display, prev_rect)?;
         }
     }
     if new_rect.size.width <= DIRTY_MAX_W && new_rect.size.height <= DIRTY_MAX_H {
-        blit_composed_area(display, dirty_buf, new_rect, current, background, true)?;
+        blit_composed_area(display, dirty_buf, new_rect, actor, pose, background, true)?;
     }
     Ok(())
 }
