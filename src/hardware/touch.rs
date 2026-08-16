@@ -1,7 +1,7 @@
 //! CST816x capacitive touch controller via I2C.
 //!
 //! LilyGo T-Display-S3 AMOLED Touch (1.91"): SDA=GPIO3, SCL=GPIO2, IRQ=GPIO21.
-//! Tap zones: left third faces left, right third faces right, center cycles behavior.
+//! Tap zones: left third faces left, right third faces right, center picks a random other behavior.
 
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embedded_hal::i2c::I2c;

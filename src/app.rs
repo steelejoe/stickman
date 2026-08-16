@@ -99,7 +99,7 @@ impl App {
                 }
                 match touch.read() {
                     Ok(_) => esp_println::println!(
-                        "Touch: CST816 ready (left/right: face, center: cycle)"
+                        "Touch: CST816 ready (left/right: face, center: random behavior)"
                     ),
                     Err(_) => esp_println::println!(
                         "Touch: probe failed at boot; taps may still work after contact"
@@ -132,7 +132,7 @@ impl App {
     pub fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
-            "Tap left/right to face; center (or BOOT) cycles: walk → idle → jump → crouch → search → begging → sword → stab → crouch-sword → crouch-stab → knockback → tumble"
+            "Tap left/right to face; center tap picks a random other behavior; BOOT cycles: walk → idle → jump → crouch → search → begging → sword → stab → crouch-sword → crouch-stab → knockback → tumble"
         );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);
@@ -144,7 +144,7 @@ impl App {
             last_tick = frame_start;
             let delta_ms = elapsed.min(MAX_DELTA_MS).max(1);
 
-            // Positioned touch tap: left/right face, center cycles.
+            // Positioned touch tap: left/right face, center picks a random other behavior.
             if let Some(ref mut touch) = self.touch {
                 if let Some(point) = touch.poll_tap() {
                     let action = tap_action_for_x(point.x as u32, DISPLAY_WIDTH);

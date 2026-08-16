@@ -2,7 +2,7 @@
 //!
 //! Input mapping:
 //!   Spacebar          → BOOT button (cycle behavior)
-//!   Left mouse click  → touch tap (left/right: face, center: cycle)
+//!   Left mouse click  → touch tap (left/right: face, center: random behavior)
 //!   Escape / close    → quit
 //!
 //! Background: loads `assets/background.png` (preferred) or
@@ -196,7 +196,7 @@ fn main() {
     let height = DISPLAY_HEIGHT as usize;
 
     let mut window = Window::new(
-        "Stickman Sim — Click L/R face · Center/Space cycle · Esc quit",
+        "Stickman Sim — Click L/R face · Center random · Space cycle · Esc quit",
         width,
         height,
         WindowOptions {
@@ -230,7 +230,7 @@ fn main() {
 
     println!("Stickman simulation running.");
     println!("  Spacebar         → cycle behavior (BOOT button)");
-    println!("  Left mouse click → left/right face, center cycle (touch)");
+    println!("  Left mouse click → left/right face, center random behavior (touch)");
     println!("  Escape / close   → quit");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {

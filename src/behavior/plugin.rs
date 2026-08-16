@@ -105,6 +105,8 @@ behaviors! {
 pub struct BehaviorManager {
     current: BehaviorVariant,
     index: usize,
+    /// xorshift32 state; never zero.
+    rng: u32,
 }
 
 impl BehaviorManager {
@@ -112,6 +114,7 @@ impl BehaviorManager {
         Self {
             current: BehaviorVariant::new(BehaviorId::Walking),
             index: 0,
+            rng: 0xA5A5_5A5A,
         }
     }
 
@@ -120,7 +123,39 @@ impl BehaviorManager {
         self.current = BehaviorVariant::new(BEHAVIOR_ORDER[self.index]);
     }
 
+    /// Switch to a uniformly chosen behavior other than the current one.
+    ///
+    /// `entropy` is mixed into the generator (tap X, frame delta, …) so device
+    /// and sim picks are not a fixed sequence from a constant seed.
+    pub fn cycle_random(&mut self, entropy: u32) {
+        self.mix_entropy(entropy);
+        let n = BEHAVIOR_ORDER.len();
+        if n <= 1 {
+            return;
+        }
+        let skip = 1 + (self.next_u32() as usize % (n - 1));
+        self.index = (self.index + skip) % n;
+        self.current = BehaviorVariant::new(BEHAVIOR_ORDER[self.index]);
+    }
+
+    fn mix_entropy(&mut self, entropy: u32) {
+        self.rng ^= entropy.wrapping_mul(0x9E37_79B9);
+        if self.rng == 0 {
+            self.rng = 1;
+        }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = if x == 0 { 1 } else { x };
+        self.rng
+    }
+
     pub fn update(&mut self, delta_ms: u64, state: &mut StickmanState) {
+        self.mix_entropy(delta_ms as u32);
         let mut ctx = UpdateContext {
             delta_ms,
             display_width: crate::DISPLAY_WIDTH,
@@ -141,5 +176,36 @@ impl BehaviorManager {
         D: DrawTarget<Color = Rgb565>,
     {
         self.current.draw(display, state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cycle_random_never_stays_on_current() {
+        let mut mgr = BehaviorManager::new(StickmanState::default());
+        let n = BEHAVIOR_ORDER.len();
+        assert!(n > 1);
+        for i in 0..n * 20 {
+            let prev = mgr.index;
+            mgr.cycle_random(i as u32);
+            assert_ne!(mgr.index, prev);
+            assert!(mgr.index < n);
+        }
+    }
+
+    #[test]
+    fn cycle_random_can_reach_every_other_behavior() {
+        let mut mgr = BehaviorManager::new(StickmanState::default());
+        let n = BEHAVIOR_ORDER.len();
+        assert!(n > 1 && n <= 32);
+        let mut seen: u32 = 1 << mgr.index;
+        for i in 0..n * 32 {
+            mgr.cycle_random(i as u32);
+            seen |= 1 << mgr.index;
+        }
+        assert_eq!(seen, (1 << n) - 1);
     }
 }

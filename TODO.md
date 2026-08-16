@@ -60,7 +60,7 @@ TODOs:
 - [ ] Optional: attach behaviors to non-stickman images / sprites
 - [ ] Behavior self-transitions / timed sequences (beyond tap-to-cycle)
 - [ ] Turn behaviors into a tiny language
-- [ ] Add randomness to the behaviors
+- [x] Add randomness to the behaviors
 - [ ] Add collision support (maybe calculated when drawing for more precision)
 - [ ] Add collision objects
 - [ ] Add support for configuration (file over usb, wifi web site, ???)

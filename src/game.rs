@@ -15,7 +15,7 @@ use embedded_graphics::prelude::RgbColor;
 pub enum TapAction {
     FaceLeft,
     FaceRight,
-    Cycle,
+    Random,
 }
 
 /// Map a display X coordinate to a left / center / right tap action.
@@ -24,7 +24,7 @@ pub fn tap_action_for_x(x: u32, width: u32) -> TapAction {
     if x < third {
         TapAction::FaceLeft
     } else if x < third * 2 {
-        TapAction::Cycle
+        TapAction::Random
     } else {
         TapAction::FaceRight
     }
@@ -68,17 +68,18 @@ impl Game {
         self.background.is_some()
     }
 
-    /// Cycle to the next behavior (device button / center tap, or sim input).
+    /// Cycle to the next behavior (device BOOT button / sim Space).
     pub fn on_cycle_input(&mut self) {
         self.behavior_mgr.cycle_next();
     }
 
-    /// Handle a positioned tap: left/right thirds change facing; center cycles.
+    /// Handle a positioned tap: left/right thirds change facing; center picks a
+    /// random other behavior.
     pub fn on_tap(&mut self, x: u32) {
         match tap_action_for_x(x, DISPLAY_WIDTH) {
             TapAction::FaceLeft => self.stickman_state.facing_left = true,
             TapAction::FaceRight => self.stickman_state.facing_left = false,
-            TapAction::Cycle => self.on_cycle_input(),
+            TapAction::Random => self.behavior_mgr.cycle_random(x),
         }
     }
 
@@ -129,5 +130,17 @@ impl Game {
 impl Default for Game {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tap_center_is_random_action() {
+        assert_eq!(tap_action_for_x(0, 536), TapAction::FaceLeft);
+        assert_eq!(tap_action_for_x(268, 536), TapAction::Random);
+        assert_eq!(tap_action_for_x(535, 536), TapAction::FaceRight);
     }
 }
