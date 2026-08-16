@@ -3,7 +3,6 @@
 use crate::assets::{self, Rgb565Image};
 use crate::behavior::plugin::BehaviorManager;
 use crate::dirty::{self, DIRTY_BUF_LEN};
-use crate::layer;
 use crate::stickman::eval;
 use crate::stickman::ir::{Actor, PoseScratch};
 use crate::DISPLAY_WIDTH;
@@ -114,18 +113,17 @@ impl Game {
         }
 
         if !self.background_drawn {
-            layer::draw_background(display, self.background.as_ref())?;
+            dirty::draw_background(display, self.background.as_ref())?;
             self.background_drawn = true;
         }
 
         eval::sample(&self.actor, &mut self.scratch);
-        let new_rect = eval::dirty_rect(&self.actor, &self.scratch);
+        let new_rect = eval::dirty_rect(&self.scratch);
         let prev_rect = self.prev_rect.take();
         dirty::present_actor_frame(
             display,
             &mut self.dirty_buf,
             prev_rect,
-            &self.actor,
             &self.scratch,
             new_rect,
             self.background.as_ref(),

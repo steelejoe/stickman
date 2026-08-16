@@ -1,15 +1,12 @@
-//! Evaluate a clip into world-space bone tips, then stroke them.
+//! Evaluate a clip into world-space bone tips.
 
 use crate::stickman::geometry::{rotate_point_cw, sin_cos_deg_milli};
 use crate::stickman::ir::{
-    local_t, sample_track, Actor, BoneKind, LoopMode, PoseScratch, Prop, Spin, MAX_BONES,
+    sample_track, wrap_time, Actor, BoneKind, LoopMode, PoseScratch, Prop, Spin, MAX_BONES,
 };
 use crate::stickman::library;
 use embedded_graphics::geometry::{Point, Size};
 use embedded_graphics::primitives::Rectangle;
-
-/// Hip bone index in [`crate::stickman::library::STICKMAN`].
-const HIP: usize = 1;
 
 /// Sample `actor`'s clip into `out` (FK + optional spin).
 pub fn sample(actor: &Actor, out: &mut PoseScratch) {
@@ -17,6 +14,7 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
     let species = clip.species;
     let n = species.bones.len().min(MAX_BONES);
     out.n = n;
+    out.species = Some(species);
 
     let mut angle = [0i32; MAX_BONES];
     let mut length = [0i32; MAX_BONES];
@@ -31,8 +29,8 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
         vis[i] = bone.visible;
     }
 
-    let looping = matches!(clip.loop_mode, LoopMode::Loop | LoopMode::PingPong);
-    let t = local_t(actor.time_ms, clip);
+    let looping = clip.loop_mode == LoopMode::Loop;
+    let t = wrap_time(actor.time_ms, clip) as u16;
 
     for track in clip.tracks {
         let bone = track.bone as usize;
@@ -72,7 +70,8 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
         out.visible[i] = vis[i];
     }
 
-    if clip.spin != Spin::None && spin_deg != 0 && n > HIP {
+    let hip = library::HIP as usize;
+    if clip.spin != Spin::None && spin_deg != 0 && n > hip {
         let signed = match clip.spin {
             Spin::Knockback => {
                 if actor.facing_left {
@@ -90,7 +89,7 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
             }
             Spin::None => 0,
         };
-        let pivot = (out.tip[HIP].x, out.tip[HIP].y);
+        let pivot = (out.tip[hip].x, out.tip[hip].y);
         for i in 0..n {
             let o = rotate_point_cw((out.origin[i].x, out.origin[i].y), pivot, signed);
             let t = rotate_point_cw((out.tip[i].x, out.tip[i].y), pivot, signed);
@@ -109,8 +108,10 @@ fn joint_tip(origin: Point, angle_deg: i32, length: i32, dir: i32) -> Point {
 }
 
 /// Inclusive AABB of visible strokes, padded for body thickness.
-pub fn dirty_rect(actor: &Actor, pose: &PoseScratch) -> Rectangle {
-    let clip = library::clip(actor.clip);
+pub fn dirty_rect(pose: &PoseScratch) -> Rectangle {
+    let Some(species) = pose.species else {
+        return Rectangle::new(Point::new(0, 0), Size::new(16, 16));
+    };
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
     let mut max_x = i32::MIN;
@@ -121,12 +122,25 @@ pub fn dirty_rect(actor: &Actor, pose: &PoseScratch) -> Rectangle {
         if !pose.visible[i] {
             continue;
         }
-        let bone = &clip.species.bones[i];
-        match bone.kind {
+        match species.bones[i].kind {
             BoneKind::Joint => {}
             BoneKind::Line => {
-                include_point(&mut any, &mut min_x, &mut min_y, &mut max_x, &mut max_y, pose.origin[i]);
-                include_point(&mut any, &mut min_x, &mut min_y, &mut max_x, &mut max_y, pose.tip[i]);
+                include_point(
+                    &mut any,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    pose.origin[i],
+                );
+                include_point(
+                    &mut any,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    pose.tip[i],
+                );
             }
             BoneKind::Circle { diameter } => {
                 let r = (diameter as i32 + 1) / 2 + 1;
@@ -152,7 +166,12 @@ pub fn dirty_rect(actor: &Actor, pose: &PoseScratch) -> Rectangle {
     }
 
     if !any {
-        return Rectangle::new(Point::new(actor.x - 8, actor.y - 8), Size::new(16, 16));
+        let p = if pose.n > 0 {
+            pose.origin[0]
+        } else {
+            Point::new(0, 0)
+        };
+        return Rectangle::new(Point::new(p.x - 8, p.y - 8), Size::new(16, 16));
     }
 
     const PAD: i32 = 4;
@@ -176,15 +195,10 @@ fn include_point(
     *max_y = (*max_y).max(p.y);
 }
 
-/// Species for the sampled pose (for drawing kinds).
-pub fn species_of(actor: &Actor) -> &'static crate::stickman::ir::Species {
-    library::clip(actor.clip).species
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stickman::ir::{Clip, Interp, Key, LoopMode};
+    use crate::stickman::ir::{Interp, Key};
 
     #[test]
     fn lerp_midpoint() {
@@ -240,18 +254,16 @@ mod tests {
     }
 
     #[test]
-    fn ping_pong_folds_time() {
-        let clip = Clip {
-            species: library::clip(crate::stickman::ir::ClipId::Idle).species,
-            duration_ms: 100,
-            loop_mode: LoopMode::PingPong,
-            travel_dx: 0,
-            spin: Spin::None,
-            tracks: &[],
-        };
-        assert_eq!(local_t(0, &clip), 0);
-        assert_eq!(local_t(100, &clip), 100);
-        assert_eq!(local_t(150, &clip), 50);
+    fn wrap_time_once_clamps_and_loop_mods() {
+        let idle = library::clip(crate::stickman::ir::ClipId::Idle);
+        assert_eq!(wrap_time(0, idle), 0);
+        assert_eq!(wrap_time(99, idle), idle.duration_ms as u32);
+
+        let walk = library::clip(crate::stickman::ir::ClipId::Walk);
+        let d = walk.duration_ms as u32;
+        assert_eq!(wrap_time(0, walk), 0);
+        assert_eq!(wrap_time(d, walk), 0);
+        assert_eq!(wrap_time(d + 10, walk), 10);
     }
 
     #[test]

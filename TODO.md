@@ -73,4 +73,3 @@ TODOs:
 - [ ] Add `scripts/check-env.sh` to verify `cargo`, `rustup`, `espflash`, and the ESP toolchain resolve
 - [ ] Add CI for device (`make device`) and simulation (`make build-sim`) builds
 - [ ] Move display init out of `src/app.rs` into `src/hardware/display.rs` (currently a stub)
-

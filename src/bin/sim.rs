@@ -254,7 +254,7 @@ fn main() {
         prev_mouse = mouse;
 
         game.update(delta_ms);
-        // Incremental draw: erase previous pose + dirty floor restore (no full clear).
+        // Dirty-tile present: compose backdrop + figure in RAM, one blit.
         game.draw(&mut display).expect("draw failed");
 
         let buf = display.to_u32_buffer();

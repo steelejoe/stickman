@@ -7,7 +7,7 @@
 
 use crate::assets::Rgb565Image;
 use crate::stickman::geometry::floor_y;
-use crate::stickman::ir::{Actor, PoseScratch};
+use crate::stickman::ir::PoseScratch;
 use crate::stickman::render;
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embedded_graphics::draw_target::DrawTarget;
@@ -127,6 +127,20 @@ fn union_rects(a: Rectangle, b: Rectangle) -> Rectangle {
     )
 }
 
+/// Paint layer 0 once (backdrop + floor). Later frames dirty-restore via tiles.
+pub fn draw_background<D>(
+    display: &mut D,
+    background: Option<&Rgb565Image<'_>>,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    if let Some(img) = background {
+        img.draw(display, Point::zero())?;
+    }
+    render::draw_floor(display)
+}
+
 fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Option<&Rgb565Image<'_>>) {
     let w = width as usize;
     let h = buf.len() / w;
@@ -152,7 +166,6 @@ pub fn blit_composed_area<D>(
     display: &mut D,
     buf: &mut [Rgb565],
     area: Rectangle,
-    actor: &Actor,
     pose: &PoseScratch,
     background: Option<&Rgb565Image<'_>>,
     draw_figure: bool,
@@ -174,7 +187,7 @@ where
     if draw_figure {
         let mut slice = SliceDisplay::new(tile, w, h);
         let mut view = slice.translated(Point::new(-area.top_left.x, -area.top_left.y));
-        let _ = render::draw_actor(&mut view, actor, pose);
+        let _ = render::draw_actor(&mut view, pose);
     }
 
     let tile = &buf[..need];
@@ -186,7 +199,6 @@ pub fn present_actor_frame<D>(
     display: &mut D,
     dirty_buf: &mut [Rgb565; DIRTY_BUF_LEN],
     prev_rect: Option<Rectangle>,
-    actor: &Actor,
     pose: &PoseScratch,
     new_rect: Rectangle,
     background: Option<&Rgb565Image<'_>>,
@@ -205,19 +217,19 @@ where
     }
 
     if area.size.width <= DIRTY_MAX_W && area.size.height <= DIRTY_MAX_H {
-        return blit_composed_area(display, dirty_buf, area, actor, pose, background, true);
+        return blit_composed_area(display, dirty_buf, area, pose, background, true);
     }
 
     if let Some(p) = prev_rect {
         let prev_rect = clamp_to_screen(p);
         if prev_rect.size.width <= DIRTY_MAX_W && prev_rect.size.height <= DIRTY_MAX_H {
-            blit_composed_area(display, dirty_buf, prev_rect, actor, pose, background, false)?;
+            blit_composed_area(display, dirty_buf, prev_rect, pose, background, false)?;
         } else if let Some(img) = background {
             img.blit_rect(display, prev_rect)?;
         }
     }
     if new_rect.size.width <= DIRTY_MAX_W && new_rect.size.height <= DIRTY_MAX_H {
-        blit_composed_area(display, dirty_buf, new_rect, actor, pose, background, true)?;
+        blit_composed_area(display, dirty_buf, new_rect, pose, background, true)?;
     }
     Ok(())
 }

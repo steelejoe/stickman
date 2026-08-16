@@ -99,7 +99,6 @@ pub struct Key {
 pub enum LoopMode {
     Once,
     Loop,
-    PingPong,
 }
 
 /// How [`Prop::Spin`] is signed from facing (matches the old roll modes).
@@ -171,16 +170,7 @@ impl Actor {
             self.time_ms = 0;
             return;
         }
-        let d = clip.duration_ms as u32;
-        if d == 0 {
-            self.time_ms = 0;
-            return;
-        }
-        let next = self.time_ms.saturating_add(dt_ms);
-        self.time_ms = match clip.loop_mode {
-            LoopMode::Once => next.min(d),
-            LoopMode::Loop | LoopMode::PingPong => next % d,
-        };
+        self.time_ms = wrap_time(self.time_ms.saturating_add(dt_ms), clip);
     }
 
     /// Pixels to add to `x` this tick from [`Clip::travel_dx`].
@@ -205,6 +195,7 @@ impl Actor {
 #[derive(Clone, Copy, Debug)]
 pub struct PoseScratch {
     pub n: usize,
+    pub species: Option<&'static Species>,
     pub origin: [embedded_graphics::geometry::Point; MAX_BONES],
     pub tip: [embedded_graphics::geometry::Point; MAX_BONES],
     pub visible: [bool; MAX_BONES],
@@ -214,6 +205,7 @@ impl PoseScratch {
     pub const fn new() -> Self {
         Self {
             n: 0,
+            species: None,
             origin: [embedded_graphics::geometry::Point::new(0, 0); MAX_BONES],
             tip: [embedded_graphics::geometry::Point::new(0, 0); MAX_BONES],
             visible: [false; MAX_BONES],
@@ -221,24 +213,21 @@ impl PoseScratch {
     }
 }
 
-/// Map clip local time through loop / ping-pong / once.
-pub fn local_t(time_ms: u32, clip: &Clip) -> u16 {
+impl Default for PoseScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Map clip time through once / loop. Idempotent.
+pub fn wrap_time(time_ms: u32, clip: &Clip) -> u32 {
     let d = clip.duration_ms as u32;
     if d == 0 {
         return 0;
     }
     match clip.loop_mode {
-        LoopMode::Once => time_ms.min(d) as u16,
-        LoopMode::Loop => (time_ms % d) as u16,
-        LoopMode::PingPong => {
-            let cycle = d * 2;
-            let p = time_ms % cycle;
-            if p <= d {
-                p as u16
-            } else {
-                (cycle - p) as u16
-            }
-        }
+        LoopMode::Once => time_ms.min(d),
+        LoopMode::Loop => time_ms % d,
     }
 }
 

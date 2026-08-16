@@ -6,6 +6,8 @@ use crate::stickman::ir::{
 
 /// Walk / tumble / knockback loop length (100 gait units at 90 units/s).
 pub const WALK_MS: u16 = 1111;
+/// Pixels of logical X per walk/tumble loop (knockback uses the negation).
+const TRAVEL_DX: i16 = 60;
 const STAB_MS: u16 = 900;
 const JUMP_MS: u16 = 750;
 
@@ -164,6 +166,26 @@ macro_rules! track {
     };
 }
 
+const HIP_CROUCH: Track = track!(HIP, Len, (0, 12, Hold));
+const SPINE_150: Track = track!(SPINE, Rot, (0, 150, Hold));
+const NECK_150: Track = track!(NECK, Rot, (0, 150, Hold));
+const HEAD_150: Track = track!(HEAD, Rot, (0, 150, Hold));
+const SPINE_180: Track = track!(SPINE, Rot, (0, 180, Hold));
+const NECK_180: Track = track!(NECK, Rot, (0, 180, Hold));
+const HEAD_180: Track = track!(HEAD, Rot, (0, 180, Hold));
+const CROUCH_THIGH_A: Track = track!(THIGH_A, Rot, (0, 22, Hold));
+const CROUCH_SHIN_A: Track = track!(SHIN_A, Rot, (0, -46, Hold));
+const CROUCH_THIGH_B: Track = track!(THIGH_B, Rot, (0, -11, Hold));
+const CROUCH_SHIN_B: Track = track!(SHIN_B, Rot, (0, -83, Hold));
+const FIST_ON: Track = track!(FIST, Visible, (0, 1, Hold));
+const SWORD_ON: Track = track!(SWORD, Visible, (0, 1, Hold));
+const GUARD_ON: Track = track!(GUARD, Visible, (0, 1, Hold));
+const SWORD_ARM_A: Track = track!(ARM_A, Rot, (0, 32, Hold));
+const SWORD_FOREARM_A: Track = track!(FOREARM_A, Rot, (0, 82, Hold));
+const SWORD_ARM_B: Track = track!(ARM_B, Rot, (0, 18, Hold));
+const SWORD_FOREARM_B: Track = track!(FOREARM_B, Rot, (0, 80, Hold));
+const SWORD_ROT: Track = track!(SWORD, Rot, (0, 106, Hold));
+
 static IDLE: Clip = Clip {
     species: &STICKMAN,
     duration_ms: 1,
@@ -178,17 +200,73 @@ static WALK: Clip = Clip {
     species: &STICKMAN,
     duration_ms: WALK_MS,
     loop_mode: LoopMode::Loop,
-    travel_dx: 60,
+    travel_dx: TRAVEL_DX,
     spin: Spin::None,
     tracks: &[
-        track!(THIGH_A, Rot, (0, 0, Lerp), (278, 32, Lerp), (556, 0, Lerp), (833, -32, Lerp)),
-        track!(SHIN_A, Rot, (0, -8, Lerp), (278, 18, Lerp), (556, -12, Lerp), (833, -92, Lerp)),
-        track!(THIGH_B, Rot, (0, 0, Lerp), (278, -32, Lerp), (556, 0, Lerp), (833, 32, Lerp)),
-        track!(SHIN_B, Rot, (0, -12, Lerp), (278, -92, Lerp), (556, -8, Lerp), (833, 18, Lerp)),
-        track!(ARM_A, Rot, (0, 0, Lerp), (278, -28, Lerp), (556, 0, Lerp), (833, 28, Lerp)),
-        track!(FOREARM_A, Rot, (0, 18, Lerp), (278, 4, Lerp), (556, 18, Lerp), (833, 60, Lerp)),
-        track!(ARM_B, Rot, (0, 0, Lerp), (278, 28, Lerp), (556, 0, Lerp), (833, -28, Lerp)),
-        track!(FOREARM_B, Rot, (0, 18, Lerp), (278, 60, Lerp), (556, 18, Lerp), (833, 4, Lerp)),
+        track!(
+            THIGH_A,
+            Rot,
+            (0, 0, Lerp),
+            (278, 32, Lerp),
+            (556, 0, Lerp),
+            (833, -32, Lerp)
+        ),
+        track!(
+            SHIN_A,
+            Rot,
+            (0, -8, Lerp),
+            (278, 18, Lerp),
+            (556, -12, Lerp),
+            (833, -92, Lerp)
+        ),
+        track!(
+            THIGH_B,
+            Rot,
+            (0, 0, Lerp),
+            (278, -32, Lerp),
+            (556, 0, Lerp),
+            (833, 32, Lerp)
+        ),
+        track!(
+            SHIN_B,
+            Rot,
+            (0, -12, Lerp),
+            (278, -92, Lerp),
+            (556, -8, Lerp),
+            (833, 18, Lerp)
+        ),
+        track!(
+            ARM_A,
+            Rot,
+            (0, 0, Lerp),
+            (278, -28, Lerp),
+            (556, 0, Lerp),
+            (833, 28, Lerp)
+        ),
+        track!(
+            FOREARM_A,
+            Rot,
+            (0, 18, Lerp),
+            (278, 4, Lerp),
+            (556, 18, Lerp),
+            (833, 60, Lerp)
+        ),
+        track!(
+            ARM_B,
+            Rot,
+            (0, 0, Lerp),
+            (278, 28, Lerp),
+            (556, 0, Lerp),
+            (833, -28, Lerp)
+        ),
+        track!(
+            FOREARM_B,
+            Rot,
+            (0, 18, Lerp),
+            (278, 60, Lerp),
+            (556, 18, Lerp),
+            (833, 4, Lerp)
+        ),
     ],
 };
 
@@ -217,14 +295,14 @@ static CROUCH: Clip = Clip {
     travel_dx: 0,
     spin: Spin::None,
     tracks: &[
-        track!(HIP, Len, (0, 12, Hold)),
-        track!(SPINE, Rot, (0, 150, Hold)),
-        track!(NECK, Rot, (0, 150, Hold)),
-        track!(HEAD, Rot, (0, 150, Hold)),
-        track!(THIGH_A, Rot, (0, 22, Hold)),
-        track!(SHIN_A, Rot, (0, -46, Hold)),
-        track!(THIGH_B, Rot, (0, -11, Hold)),
-        track!(SHIN_B, Rot, (0, -83, Hold)),
+        HIP_CROUCH,
+        SPINE_150,
+        NECK_150,
+        HEAD_150,
+        CROUCH_THIGH_A,
+        CROUCH_SHIN_A,
+        CROUCH_THIGH_B,
+        CROUCH_SHIN_B,
         track!(ARM_A, Rot, (0, 10, Hold)),
         track!(FOREARM_A, Rot, (0, 28, Hold)),
         track!(ARM_B, Rot, (0, -8, Hold)),
@@ -239,24 +317,20 @@ static BEG: Clip = Clip {
     travel_dx: 0,
     spin: Spin::None,
     tracks: &[
-        track!(HIP, Len, (0, 12, Hold)),
-        track!(SPINE, Rot, (0, 180, Hold)),
-        track!(NECK, Rot, (0, 180, Hold)),
-        track!(HEAD, Rot, (0, 180, Hold)),
-        track!(THIGH_A, Rot, (0, 22, Hold)),
-        track!(SHIN_A, Rot, (0, -46, Hold)),
-        track!(THIGH_B, Rot, (0, -11, Hold)),
-        track!(SHIN_B, Rot, (0, -83, Hold)),
+        HIP_CROUCH,
+        SPINE_180,
+        NECK_180,
+        HEAD_180,
+        CROUCH_THIGH_A,
+        CROUCH_SHIN_A,
+        CROUCH_THIGH_B,
+        CROUCH_SHIN_B,
         track!(ARM_A, Rot, (0, 70, Hold)),
         track!(FOREARM_A, Rot, (0, 130, Hold)),
         track!(ARM_B, Rot, (0, 62, Hold)),
         track!(FOREARM_B, Rot, (0, 128, Hold)),
     ],
 };
-
-const SWORD_ON: Track = track!(FIST, Visible, (0, 1, Hold));
-const SWORD_ON2: Track = track!(SWORD, Visible, (0, 1, Hold));
-const SWORD_ON3: Track = track!(GUARD, Visible, (0, 1, Hold));
 
 static SWORD_STANCE: Clip = Clip {
     species: &STICKMAN,
@@ -269,14 +343,14 @@ static SWORD_STANCE: Clip = Clip {
         track!(SHIN_A, Rot, (0, 0, Hold)),
         track!(THIGH_B, Rot, (0, -8, Hold)),
         track!(SHIN_B, Rot, (0, -20, Hold)),
-        track!(ARM_A, Rot, (0, 32, Hold)),
-        track!(FOREARM_A, Rot, (0, 82, Hold)),
-        track!(ARM_B, Rot, (0, 18, Hold)),
-        track!(FOREARM_B, Rot, (0, 80, Hold)),
+        SWORD_ARM_A,
+        SWORD_FOREARM_A,
+        SWORD_ARM_B,
+        SWORD_FOREARM_B,
+        FIST_ON,
         SWORD_ON,
-        SWORD_ON2,
-        SWORD_ON3,
-        track!(SWORD, Rot, (0, 106, Hold)),
+        GUARD_ON,
+        SWORD_ROT,
     ],
 };
 
@@ -288,21 +362,69 @@ static SWORD_STAB: Clip = Clip {
     spin: Spin::None,
     tracks: &[
         track!(ROOT, Tx, (0, 0, Lerp), (450, 10, Lerp), (900, 0, Lerp)),
-        track!(THIGH_A, Rot, (0, 10, Lerp), (450, 38, Lerp), (900, 10, Lerp)),
+        track!(
+            THIGH_A,
+            Rot,
+            (0, 10, Lerp),
+            (450, 38, Lerp),
+            (900, 10, Lerp)
+        ),
         track!(SHIN_A, Rot, (0, 0, Lerp), (450, 18, Lerp), (900, 0, Lerp)),
-        track!(THIGH_B, Rot, (0, -8, Lerp), (450, -26, Lerp), (900, -8, Lerp)),
-        track!(SHIN_B, Rot, (0, -20, Lerp), (450, -46, Lerp), (900, -20, Lerp)),
-        track!(SPINE, Rot, (0, 180, Lerp), (450, 162, Lerp), (900, 180, Lerp)),
-        track!(NECK, Rot, (0, 180, Lerp), (450, 162, Lerp), (900, 180, Lerp)),
-        track!(HEAD, Rot, (0, 180, Lerp), (450, 162, Lerp), (900, 180, Lerp)),
+        track!(
+            THIGH_B,
+            Rot,
+            (0, -8, Lerp),
+            (450, -26, Lerp),
+            (900, -8, Lerp)
+        ),
+        track!(
+            SHIN_B,
+            Rot,
+            (0, -20, Lerp),
+            (450, -46, Lerp),
+            (900, -20, Lerp)
+        ),
+        track!(
+            SPINE,
+            Rot,
+            (0, 180, Lerp),
+            (450, 162, Lerp),
+            (900, 180, Lerp)
+        ),
+        track!(
+            NECK,
+            Rot,
+            (0, 180, Lerp),
+            (450, 162, Lerp),
+            (900, 180, Lerp)
+        ),
+        track!(
+            HEAD,
+            Rot,
+            (0, 180, Lerp),
+            (450, 162, Lerp),
+            (900, 180, Lerp)
+        ),
         track!(ARM_A, Rot, (0, 32, Lerp), (450, 90, Lerp), (900, 32, Lerp)),
-        track!(FOREARM_A, Rot, (0, 82, Lerp), (450, 90, Lerp), (900, 82, Lerp)),
-        track!(ARM_B, Rot, (0, 18, Hold)),
-        track!(FOREARM_B, Rot, (0, 80, Hold)),
+        track!(
+            FOREARM_A,
+            Rot,
+            (0, 82, Lerp),
+            (450, 90, Lerp),
+            (900, 82, Lerp)
+        ),
+        SWORD_ARM_B,
+        SWORD_FOREARM_B,
+        FIST_ON,
         SWORD_ON,
-        SWORD_ON2,
-        SWORD_ON3,
-        track!(SWORD, Rot, (0, 106, Lerp), (450, 90, Lerp), (900, 106, Lerp)),
+        GUARD_ON,
+        track!(
+            SWORD,
+            Rot,
+            (0, 106, Lerp),
+            (450, 90, Lerp),
+            (900, 106, Lerp)
+        ),
     ],
 };
 
@@ -313,22 +435,22 @@ static SWORD_CROUCH_STANCE: Clip = Clip {
     travel_dx: 0,
     spin: Spin::None,
     tracks: &[
-        track!(HIP, Len, (0, 12, Hold)),
-        track!(SPINE, Rot, (0, 150, Hold)),
-        track!(NECK, Rot, (0, 150, Hold)),
-        track!(HEAD, Rot, (0, 150, Hold)),
+        HIP_CROUCH,
+        SPINE_150,
+        NECK_150,
+        HEAD_150,
         track!(THIGH_A, Rot, (0, 58, Hold)),
         track!(SHIN_A, Rot, (0, -14, Hold)),
         track!(THIGH_B, Rot, (0, -28, Hold)),
         track!(SHIN_B, Rot, (0, -126, Hold)),
-        track!(ARM_A, Rot, (0, 32, Hold)),
-        track!(FOREARM_A, Rot, (0, 82, Hold)),
-        track!(ARM_B, Rot, (0, 18, Hold)),
-        track!(FOREARM_B, Rot, (0, 80, Hold)),
+        SWORD_ARM_A,
+        SWORD_FOREARM_A,
+        SWORD_ARM_B,
+        SWORD_FOREARM_B,
+        FIST_ON,
         SWORD_ON,
-        SWORD_ON2,
-        SWORD_ON3,
-        track!(SWORD, Rot, (0, 106, Hold)),
+        GUARD_ON,
+        SWORD_ROT,
     ],
 };
 
@@ -340,22 +462,76 @@ static SWORD_CROUCH_STAB: Clip = Clip {
     spin: Spin::None,
     tracks: &[
         track!(ROOT, Tx, (0, 0, Lerp), (450, 10, Lerp), (900, 0, Lerp)),
-        track!(HIP, Len, (0, 12, Hold)),
-        track!(SPINE, Rot, (0, 150, Lerp), (450, 138, Lerp), (900, 150, Lerp)),
-        track!(NECK, Rot, (0, 150, Lerp), (450, 138, Lerp), (900, 150, Lerp)),
-        track!(HEAD, Rot, (0, 150, Lerp), (450, 138, Lerp), (900, 150, Lerp)),
-        track!(THIGH_A, Rot, (0, 58, Lerp), (450, 80, Lerp), (900, 58, Lerp)),
-        track!(SHIN_A, Rot, (0, -14, Lerp), (450, 2, Lerp), (900, -14, Lerp)),
-        track!(THIGH_B, Rot, (0, -28, Lerp), (450, -38, Lerp), (900, -28, Lerp)),
-        track!(SHIN_B, Rot, (0, -126, Lerp), (450, -136, Lerp), (900, -126, Lerp)),
+        HIP_CROUCH,
+        track!(
+            SPINE,
+            Rot,
+            (0, 150, Lerp),
+            (450, 138, Lerp),
+            (900, 150, Lerp)
+        ),
+        track!(
+            NECK,
+            Rot,
+            (0, 150, Lerp),
+            (450, 138, Lerp),
+            (900, 150, Lerp)
+        ),
+        track!(
+            HEAD,
+            Rot,
+            (0, 150, Lerp),
+            (450, 138, Lerp),
+            (900, 150, Lerp)
+        ),
+        track!(
+            THIGH_A,
+            Rot,
+            (0, 58, Lerp),
+            (450, 80, Lerp),
+            (900, 58, Lerp)
+        ),
+        track!(
+            SHIN_A,
+            Rot,
+            (0, -14, Lerp),
+            (450, 2, Lerp),
+            (900, -14, Lerp)
+        ),
+        track!(
+            THIGH_B,
+            Rot,
+            (0, -28, Lerp),
+            (450, -38, Lerp),
+            (900, -28, Lerp)
+        ),
+        track!(
+            SHIN_B,
+            Rot,
+            (0, -126, Lerp),
+            (450, -136, Lerp),
+            (900, -126, Lerp)
+        ),
         track!(ARM_A, Rot, (0, 32, Lerp), (450, 90, Lerp), (900, 32, Lerp)),
-        track!(FOREARM_A, Rot, (0, 82, Lerp), (450, 90, Lerp), (900, 82, Lerp)),
-        track!(ARM_B, Rot, (0, 18, Hold)),
-        track!(FOREARM_B, Rot, (0, 80, Hold)),
+        track!(
+            FOREARM_A,
+            Rot,
+            (0, 82, Lerp),
+            (450, 90, Lerp),
+            (900, 82, Lerp)
+        ),
+        SWORD_ARM_B,
+        SWORD_FOREARM_B,
+        FIST_ON,
         SWORD_ON,
-        SWORD_ON2,
-        SWORD_ON3,
-        track!(SWORD, Rot, (0, 106, Lerp), (450, 90, Lerp), (900, 106, Lerp)),
+        GUARD_ON,
+        track!(
+            SWORD,
+            Rot,
+            (0, 106, Lerp),
+            (450, 90, Lerp),
+            (900, 106, Lerp)
+        ),
     ],
 };
 
@@ -363,7 +539,7 @@ static KNOCKBACK: Clip = Clip {
     species: &STICKMAN,
     duration_ms: WALK_MS,
     loop_mode: LoopMode::Loop,
-    travel_dx: -60,
+    travel_dx: -TRAVEL_DX,
     spin: Spin::Knockback,
     tracks: &[
         track!(THIGH_A, Rot, (0, 50, Hold)),
@@ -374,7 +550,7 @@ static KNOCKBACK: Clip = Clip {
         track!(FOREARM_A, Rot, (0, 100, Hold)),
         track!(ARM_B, Rot, (0, -70, Hold)),
         track!(FOREARM_B, Rot, (0, -50, Hold)),
-        track!(ROOT, Spin, (0, 0, Lerp), (1111, 360, Lerp)),
+        track!(ROOT, Spin, (0, 0, Lerp), (WALK_MS, 360, Lerp)),
     ],
 };
 
@@ -382,13 +558,13 @@ static TUMBLE: Clip = Clip {
     species: &STICKMAN,
     duration_ms: WALK_MS,
     loop_mode: LoopMode::Loop,
-    travel_dx: 60,
+    travel_dx: TRAVEL_DX,
     spin: Spin::Tumble,
     tracks: &[
         track!(HIP, Len, (0, 18, Hold)),
-        track!(SPINE, Rot, (0, 150, Hold)),
-        track!(NECK, Rot, (0, 150, Hold)),
-        track!(HEAD, Rot, (0, 150, Hold)),
+        SPINE_150,
+        NECK_150,
+        HEAD_150,
         track!(THIGH_A, Rot, (0, 58, Hold)),
         track!(SHIN_A, Rot, (0, -14, Hold)),
         track!(THIGH_B, Rot, (0, -28, Hold)),
@@ -397,7 +573,7 @@ static TUMBLE: Clip = Clip {
         track!(FOREARM_A, Rot, (0, 90, Hold)),
         track!(ARM_B, Rot, (0, 40, Hold)),
         track!(FOREARM_B, Rot, (0, 80, Hold)),
-        track!(ROOT, Spin, (0, 0, Lerp), (1111, 360, Lerp)),
+        track!(ROOT, Spin, (0, 0, Lerp), (WALK_MS, 360, Lerp)),
     ],
 };
 
@@ -421,13 +597,12 @@ pub fn clip(id: ClipId) -> &'static Clip {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stickman::geometry::stride_length_px;
 
     #[test]
-    fn walk_travel_matches_gait_stride() {
-        assert_eq!(WALK.travel_dx as i32, stride_length_px());
-        assert_eq!(TUMBLE.travel_dx as i32, stride_length_px());
-        assert_eq!(KNOCKBACK.travel_dx as i32, -stride_length_px());
+    fn walk_travel_is_shared() {
+        assert_eq!(WALK.travel_dx, TRAVEL_DX);
+        assert_eq!(TUMBLE.travel_dx, TRAVEL_DX);
+        assert_eq!(KNOCKBACK.travel_dx, -TRAVEL_DX);
     }
 
     #[test]
