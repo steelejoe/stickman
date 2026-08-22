@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod behavior;
+pub mod collision;
 pub mod dirty;
 pub mod game;
 pub mod hardware;

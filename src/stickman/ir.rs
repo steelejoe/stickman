@@ -4,6 +4,7 @@
 //! [`PoseScratch`] in [`crate::game::Game`]. Clips interpolate joint angles;
 //! world logic (bounce, facing, jump height) stays in Rust behaviors.
 
+use crate::collision::CollisionPolicy;
 use crate::layer::LayerId;
 use crate::stickman::geometry::floor_y;
 use crate::DISPLAY_WIDTH;
@@ -22,6 +23,7 @@ pub enum ClipId {
     SwordCrouchStab,
     Knockback,
     Tumble,
+    BoxIdle,
 }
 
 /// Compile-time cap for one species. Scratch is sized to this, not clip count.
@@ -36,6 +38,8 @@ pub enum BoneKind {
     Line,
     /// Circle centered on this tip (`diameter` matches embedded-graphics).
     Circle { diameter: u32 },
+    /// Axis-aligned box. Bottom-center is this bone's origin; extends up (−Y).
+    Rect { width: u32, height: u32 },
 }
 
 /// One bone in a species. Angles are absolute degrees from vertical
@@ -139,6 +143,8 @@ pub struct Actor {
     pub layer: LayerId,
     pub clip: ClipId,
     pub time_ms: u32,
+    /// Outcomes when this actor enters a contact. See [`CollisionPolicy::default`].
+    pub collision: CollisionPolicy,
     travel_rem: i32,
 }
 
@@ -151,6 +157,7 @@ impl Default for Actor {
             layer: LayerId::Middle,
             clip: ClipId::Walk,
             time_ms: 0,
+            collision: CollisionPolicy::default(),
             travel_rem: 0,
         }
     }
@@ -271,15 +278,4 @@ fn blend(a: &Key, b: &Key, t: u16) -> i32 {
         return b.value as i32;
     }
     a.value as i32 + (b.value as i32 - a.value as i32) * (t as i32 - a.t_ms as i32) / span
-}
-
-/// Screen-edge bounce used by walk / tumble. Knockback overrides facing.
-pub fn bounce_edges(actor: &mut Actor, display_width: i32, margin: i32) {
-    if actor.x <= margin {
-        actor.x = margin;
-        actor.facing_left = false;
-    } else if actor.x >= display_width - margin {
-        actor.x = display_width - margin;
-        actor.facing_left = true;
-    }
 }

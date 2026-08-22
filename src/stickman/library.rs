@@ -1,8 +1,14 @@
-//! Stickman species and clips. Authoring is hand-written IR (no parser).
+//! Species and clips. Authoring is hand-written IR (no parser).
 
+use crate::stickman::geometry::STANDING_HEIGHT;
 use crate::stickman::ir::{
     Bone, BoneKind, Clip, ClipId, Interp, Key, LoopMode, Prop, Species, Spin, Track,
 };
+
+/// Crate height: half the standing stickman (feet → top of head).
+pub const BOX_HEIGHT: u32 = (STANDING_HEIGHT / 2) as u32;
+/// Square footprint matching [`BOX_HEIGHT`].
+pub const BOX_WIDTH: u32 = BOX_HEIGHT;
 
 /// Walk / tumble / knockback loop length (100 gait units at 90 units/s).
 pub const WALK_MS: u16 = 1111;
@@ -148,6 +154,20 @@ pub static STICKMAN: Species = Species {
             visible: false,
         },
     ],
+};
+
+/// Static crate on the walk baseline. One rect bone, no motion tracks.
+pub static BOX: Species = Species {
+    bones: &[Bone {
+        parent: -1,
+        length: 0,
+        rest_deg: 0,
+        kind: BoneKind::Rect {
+            width: BOX_WIDTH,
+            height: BOX_HEIGHT,
+        },
+        visible: true,
+    }],
 };
 
 macro_rules! track {
@@ -554,6 +574,15 @@ static KNOCKBACK: Clip = Clip {
     ],
 };
 
+static BOX_IDLE: Clip = Clip {
+    species: &BOX,
+    duration_ms: 1,
+    loop_mode: LoopMode::Once,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: &[],
+};
+
 static TUMBLE: Clip = Clip {
     species: &STICKMAN,
     duration_ms: WALK_MS,
@@ -591,6 +620,7 @@ pub fn clip(id: ClipId) -> &'static Clip {
         ClipId::SwordCrouchStab => &SWORD_CROUCH_STAB,
         ClipId::Knockback => &KNOCKBACK,
         ClipId::Tumble => &TUMBLE,
+        ClipId::BoxIdle => &BOX_IDLE,
     }
 }
 
@@ -609,5 +639,19 @@ mod tests {
     fn stickman_fits_scratch() {
         assert!(STICKMAN.bones.len() <= crate::stickman::ir::MAX_BONES);
         assert_eq!(STICKMAN.bones.len(), 16);
+    }
+
+    #[test]
+    fn box_is_half_standing_height() {
+        assert!(BOX.bones.len() <= crate::stickman::ir::MAX_BONES);
+        assert_eq!(BOX_HEIGHT, (STANDING_HEIGHT / 2) as u32);
+        assert_eq!(BOX_WIDTH, BOX_HEIGHT);
+        assert_eq!(
+            BOX.bones[0].kind,
+            BoneKind::Rect {
+                width: BOX_WIDTH,
+                height: BOX_HEIGHT,
+            }
+        );
     }
 }

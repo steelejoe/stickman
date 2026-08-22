@@ -161,12 +161,13 @@ fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Option<&Rgb5
     }
 }
 
-/// Compose layer 0 (+ optional figure) into `buf` for `area`, then `fill_contiguous`.
+/// Compose layer 0 (+ optional figure and overlays) into `buf` for `area`, then `fill_contiguous`.
 pub fn blit_composed_area<D>(
     display: &mut D,
     buf: &mut [Rgb565],
     area: Rectangle,
     pose: &PoseScratch,
+    overlays: &[&PoseScratch],
     background: Option<&Rgb565Image<'_>>,
     draw_figure: bool,
 ) -> Result<(), D::Error>
@@ -184,9 +185,12 @@ where
 
     fill_layer0(tile, w, area, background);
 
+    let mut slice = SliceDisplay::new(tile, w, h);
+    let mut view = slice.translated(Point::new(-area.top_left.x, -area.top_left.y));
+    for overlay in overlays {
+        let _ = render::draw_actor(&mut view, overlay);
+    }
     if draw_figure {
-        let mut slice = SliceDisplay::new(tile, w, h);
-        let mut view = slice.translated(Point::new(-area.top_left.x, -area.top_left.y));
         let _ = render::draw_actor(&mut view, pose);
     }
 
@@ -195,12 +199,16 @@ where
 }
 
 /// Update the figure with a single contiguous display write (no erase hole).
+///
+/// `overlays` are other same-layer poses (e.g. the crate) redrawn in the tile
+/// so a walk across them does not erase them.
 pub fn present_actor_frame<D>(
     display: &mut D,
     dirty_buf: &mut [Rgb565; DIRTY_BUF_LEN],
     prev_rect: Option<Rectangle>,
     pose: &PoseScratch,
     new_rect: Rectangle,
+    overlays: &[&PoseScratch],
     background: Option<&Rgb565Image<'_>>,
 ) -> Result<(), D::Error>
 where
@@ -217,19 +225,23 @@ where
     }
 
     if area.size.width <= DIRTY_MAX_W && area.size.height <= DIRTY_MAX_H {
-        return blit_composed_area(display, dirty_buf, area, pose, background, true);
+        return blit_composed_area(display, dirty_buf, area, pose, overlays, background, true);
     }
 
     if let Some(p) = prev_rect {
         let prev_rect = clamp_to_screen(p);
         if prev_rect.size.width <= DIRTY_MAX_W && prev_rect.size.height <= DIRTY_MAX_H {
-            blit_composed_area(display, dirty_buf, prev_rect, pose, background, false)?;
+            blit_composed_area(
+                display, dirty_buf, prev_rect, pose, overlays, background, false,
+            )?;
         } else if let Some(img) = background {
             img.blit_rect(display, prev_rect)?;
         }
     }
     if new_rect.size.width <= DIRTY_MAX_W && new_rect.size.height <= DIRTY_MAX_H {
-        blit_composed_area(display, dirty_buf, new_rect, pose, background, true)?;
+        blit_composed_area(
+            display, dirty_buf, new_rect, pose, overlays, background, true,
+        )?;
     }
     Ok(())
 }

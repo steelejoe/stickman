@@ -7,7 +7,7 @@ use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle};
+use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle, Rectangle};
 
 const WHITE: Rgb565 = Rgb565::WHITE;
 const HEAD_STROKE: u32 = 2;
@@ -44,6 +44,13 @@ where
                 let stroke = if diameter >= 8 { HEAD_STROKE } else { 1 };
                 Circle::with_center(pose.tip[i], diameter)
                     .into_styled(PrimitiveStyle::with_stroke(WHITE, stroke))
+                    .draw(display)?;
+            }
+            BoneKind::Rect { width, height } => {
+                let origin = pose.origin[i];
+                let top_left = Point::new(origin.x - width as i32 / 2, origin.y - height as i32);
+                Rectangle::new(top_left, Size::new(width, height))
+                    .into_styled(PrimitiveStyle::with_stroke(WHITE, 1))
                     .draw(display)?;
             }
         }

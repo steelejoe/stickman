@@ -1,17 +1,16 @@
 //! Behavior table: cycle order, clip, and locomotion.
 //!
 //! Drawing is not per-behavior. Each row names a [`ClipId`]; [`crate::game::Game`]
-//! evaluates that clip. This module only runs world logic (travel, bounce, jump
-//! height, facing).
+//! evaluates that clip. This module only runs world logic (travel, jump height,
+//! facing). Screen-edge and model contacts are resolved by [`crate::collision`].
 //!
 //! Add a behavior with one row in [`behaviors!`]. Unique update code is a
 //! [`Loco`] variant, not a new file.
 
 use crate::stickman::geometry::{self, floor_y};
-use crate::stickman::ir::{bounce_edges, Actor, ClipId};
+use crate::stickman::ir::{Actor, ClipId};
 use crate::stickman::library;
 
-const MARGIN: i32 = 40;
 const FACE_PAUSE_MS: u32 = 500;
 const FACE_STEPS: u32 = 4;
 /// Auto-switch waits at least this long so a pose is visible.
@@ -162,21 +161,13 @@ impl BehaviorManager {
             self.current.loco(),
             actor,
             dt,
-            crate::DISPLAY_WIDTH,
             crate::DISPLAY_HEIGHT,
             &mut self.timer_ms,
         );
     }
 }
 
-fn apply_loco(
-    loco: Loco,
-    actor: &mut Actor,
-    dt_ms: u32,
-    display_width: u32,
-    display_height: u32,
-    timer_ms: &mut u32,
-) {
+fn apply_loco(loco: Loco, actor: &mut Actor, dt_ms: u32, display_height: u32, timer_ms: &mut u32) {
     match loco {
         Loco::InPlace => {
             actor.advance(dt_ms);
@@ -186,20 +177,11 @@ fn apply_loco(
             actor.advance(dt_ms);
             actor.x += actor.take_travel(dt_ms);
             actor.y = floor_y();
-            bounce_edges(actor, display_width as i32, MARGIN);
         }
         Loco::Knockback => {
             actor.advance(dt_ms);
             actor.x += actor.take_travel(dt_ms);
             actor.y = floor_y();
-            let w = display_width as i32;
-            if actor.x <= MARGIN {
-                actor.x = MARGIN;
-                actor.facing_left = true;
-            } else if actor.x >= w - MARGIN {
-                actor.x = w - MARGIN;
-                actor.facing_left = false;
-            }
         }
         Loco::Jump => {
             actor.advance(dt_ms);

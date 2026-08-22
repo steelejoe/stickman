@@ -57,13 +57,22 @@ TODOs:
 - [x] Add behavior system to the infrastructure
 - [x] Walking / idle / jump / crouch / begging / knockback / tumble behaviors
 - [x] Species + clip IR (bones in flash, clips key angles; behaviors direct world logic)
+- [x] Add randomness to the behaviors
+- [x] Add extra model (box) for testing collision
+- [x] Add collision support (maybe calculated when drawing for more precision)
 - [ ] Behaviors that control scale (and richer rotation beyond roll modes)
 - [ ] Optional: attach behaviors to non-stickman images / sprites
 - [ ] Behavior self-transitions / timed sequences (beyond tap-to-cycle)
-- [x] Add randomness to the behaviors
-- [ ] Add collision support (maybe calculated when drawing for more precision)
-- [ ] Add collision objects
+- [ ] Add chained action probability functions - e.g I could push the box when colliding with it
+- [ ] Should I add friction? i.e. how slow does box move when pushed
+- [ ] Raised baseline - what happens when I collide with top of something e.g. a box?
+- [ ] Gravity - what happens when I step off of box?
+- [ ] Rooms - what happens when I hit edges of map? can I load new background and swap positions?
 - [ ] Add support for configuration (file over usb, wifi web site, ???)
+  - Add things e.g .images converted to right format
+  - Remove things
+  - Change background
+  - Change location of stuff
 
 ## Tooling and hardware cleanup
 

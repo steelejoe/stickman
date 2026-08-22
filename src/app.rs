@@ -11,8 +11,8 @@ use esp_hal::{
     i2c::master::{Config as I2cConfig, I2c},
     peripherals::Peripherals,
     spi::{
-        Mode,
         master::{Config as SpiConfig, Spi},
+        Mode,
     },
     time::{Duration, Instant, Rate},
 };
@@ -40,11 +40,7 @@ impl App {
         let mut delay = Delay::new();
 
         // Newer board revisions require GPIO38 high before the panel will light.
-        let display_enable = Output::new(
-            peripherals.GPIO38,
-            Level::High,
-            OutputConfig::default(),
-        );
+        let display_enable = Output::new(peripherals.GPIO38, Level::High, OutputConfig::default());
 
         let sclk = peripherals.GPIO47;
         let rst = peripherals.GPIO17;
@@ -95,7 +91,9 @@ impl App {
                 let mut touch = Cst816Touch::new(i2c);
                 match touch.disable_auto_sleep() {
                     Ok(()) => esp_println::println!("Touch: auto-sleep disabled"),
-                    Err(_) => esp_println::println!("Touch: auto-sleep disable failed (will retry via polls)"),
+                    Err(_) => esp_println::println!(
+                        "Touch: auto-sleep disable failed (will retry via polls)"
+                    ),
                 }
                 match touch.read() {
                     Ok(_) => esp_println::println!(
@@ -148,12 +146,7 @@ impl App {
             if let Some(ref mut touch) = self.touch {
                 if let Some(point) = touch.poll_tap() {
                     let action = tap_action_for_x(point.x as u32, DISPLAY_WIDTH);
-                    esp_println::println!(
-                        "Touch: ({}, {}) -> {:?}",
-                        point.x,
-                        point.y,
-                        action
-                    );
+                    esp_println::println!("Touch: ({}, {}) -> {:?}", point.x, point.y, action);
                     self.game.on_tap(point.x as u32);
                 }
             }

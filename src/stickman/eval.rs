@@ -146,11 +146,41 @@ fn joint_tip(origin: Point, angle_deg: i32, length: i32, dir: i32) -> Point {
     )
 }
 
+/// Inclusive AABB of visible strokes (no dirty-tile padding).
+pub fn hitbox(pose: &PoseScratch) -> Rectangle {
+    match visible_aabb(pose) {
+        Some((min_x, min_y, max_x, max_y)) => Rectangle::new(
+            Point::new(min_x, min_y),
+            Size::new((max_x - min_x).max(1) as u32, (max_y - min_y).max(1) as u32),
+        ),
+        None => fallback_rect(pose),
+    }
+}
+
 /// Inclusive AABB of visible strokes, padded for body thickness.
 pub fn dirty_rect(pose: &PoseScratch) -> Rectangle {
-    let Some(species) = pose.species else {
-        return Rectangle::new(Point::new(0, 0), Size::new(16, 16));
+    match visible_aabb(pose) {
+        Some((min_x, min_y, max_x, max_y)) => {
+            const PAD: i32 = 4;
+            let w = (max_x - min_x + PAD * 2).max(1) as u32;
+            let h = (max_y - min_y + PAD * 2).max(1) as u32;
+            Rectangle::new(Point::new(min_x - PAD, min_y - PAD), Size::new(w, h))
+        }
+        None => fallback_rect(pose),
+    }
+}
+
+fn fallback_rect(pose: &PoseScratch) -> Rectangle {
+    let p = if pose.n > 0 {
+        pose.origin[0]
+    } else {
+        Point::new(0, 0)
     };
+    Rectangle::new(Point::new(p.x - 8, p.y - 8), Size::new(16, 16))
+}
+
+fn visible_aabb(pose: &PoseScratch) -> Option<(i32, i32, i32, i32)> {
+    let species = pose.species?;
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
     let mut max_x = i32::MIN;
@@ -201,22 +231,35 @@ pub fn dirty_rect(pose: &PoseScratch) -> Rectangle {
                     Point::new(c.x + r, c.y + r),
                 );
             }
+            BoneKind::Rect { width, height } => {
+                let o = pose.origin[i];
+                let hw = width as i32 / 2;
+                let h = height as i32;
+                include_point(
+                    &mut any,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    Point::new(o.x - hw, o.y - h),
+                );
+                include_point(
+                    &mut any,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    Point::new(o.x + hw, o.y),
+                );
+            }
         }
     }
 
     if !any {
-        let p = if pose.n > 0 {
-            pose.origin[0]
-        } else {
-            Point::new(0, 0)
-        };
-        return Rectangle::new(Point::new(p.x - 8, p.y - 8), Size::new(16, 16));
+        None
+    } else {
+        Some((min_x, min_y, max_x, max_y))
     }
-
-    const PAD: i32 = 4;
-    let w = (max_x - min_x + PAD * 2).max(1) as u32;
-    let h = (max_y - min_y + PAD * 2).max(1) as u32;
-    Rectangle::new(Point::new(min_x - PAD, min_y - PAD), Size::new(w, h))
 }
 
 fn include_point(
@@ -390,5 +433,46 @@ mod tests {
         let shin_a = pose.tip[library::SHIN_A as usize].y;
         let shin_b = pose.tip[library::SHIN_B as usize].y;
         assert!(shin_a.max(shin_b) <= 200);
+    }
+
+    #[test]
+    fn box_sits_on_baseline_at_half_stickman_height() {
+        let mut actor = Actor::default();
+        actor.play(crate::stickman::ir::ClipId::BoxIdle);
+        actor.x = 100;
+        actor.y = 200;
+        let mut pose = PoseScratch::new();
+        sample(&actor, &mut pose);
+        let lowest = contact_lowest_y(&pose).expect("contact");
+        assert_eq!(lowest, 200);
+        assert_eq!(pose.origin[0].y, 200);
+        let crate::stickman::ir::BoneKind::Rect { width, height } =
+            pose.species.unwrap().bones[0].kind
+        else {
+            panic!("box species should be a rect bone");
+        };
+        assert_eq!(height, library::BOX_HEIGHT);
+        assert_eq!(width, library::BOX_WIDTH);
+        assert_eq!(
+            height,
+            (crate::stickman::geometry::STANDING_HEIGHT / 2) as u32
+        );
+    }
+
+    #[test]
+    fn box_hitbox_is_unpadded_on_baseline() {
+        let mut actor = Actor::default();
+        actor.play(crate::stickman::ir::ClipId::BoxIdle);
+        actor.x = 100;
+        actor.y = 200;
+        let mut pose = PoseScratch::new();
+        sample(&actor, &mut pose);
+        let box_hit = hitbox(&pose);
+        assert_eq!(box_hit.top_left, Point::new(84, 168));
+        assert_eq!(
+            box_hit.size,
+            Size::new(library::BOX_WIDTH, library::BOX_HEIGHT)
+        );
+        assert_eq!(box_hit.top_left.y + box_hit.size.height as i32, 200);
     }
 }

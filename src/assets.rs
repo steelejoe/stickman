@@ -22,7 +22,9 @@ pub struct Rgb565Image<'a> {
 impl<'a> Rgb565Image<'a> {
     /// Wrap raw BE RGB565 pixels.
     pub fn from_pixels(width: u16, height: u16, data: &'a [u8]) -> Option<Self> {
-        let need = (width as usize).checked_mul(height as usize)?.checked_mul(2)?;
+        let need = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(2)?;
         if width == 0 || height == 0 || data.len() < need {
             return None;
         }
@@ -83,15 +85,18 @@ impl<'a> Rgb565Image<'a> {
         let h = area.size.height;
         let data = self.data;
 
-        display.fill_contiguous(&area, (0..h).flat_map(|row| {
-            let y = y0 + row as i32;
-            (0..w).map(move |col| {
-                let x = x0 + col as i32;
-                let idx = ((y * img_w + x) as usize) * 2;
-                let raw = u16::from_be_bytes([data[idx], data[idx + 1]]);
-                Rgb565::from(RawU16::new(raw))
-            })
-        }))
+        display.fill_contiguous(
+            &area,
+            (0..h).flat_map(|row| {
+                let y = y0 + row as i32;
+                (0..w).map(move |col| {
+                    let x = x0 + col as i32;
+                    let idx = ((y * img_w + x) as usize) * 2;
+                    let raw = u16::from_be_bytes([data[idx], data[idx + 1]]);
+                    Rgb565::from(RawU16::new(raw))
+                })
+            }),
+        )
     }
 }
 
