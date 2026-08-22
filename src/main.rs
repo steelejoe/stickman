@@ -5,11 +5,7 @@ extern crate alloc;
 
 use core::mem::MaybeUninit;
 use esp_backtrace as _;
-use esp_hal::{
-    clock::CpuClock,
-    main,
-    Config,
-};
+use esp_hal::{clock::CpuClock, main, Config};
 use esp_println::println;
 use stickman::app::App;
 

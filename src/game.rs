@@ -1,6 +1,8 @@
 //! Shared game state and update/draw loop (device + simulation).
 
 use crate::assets::{self, Rgb565Image};
+use crate::behavior::box_beh::BoxBrain;
+use crate::behavior::event::{Event, EventCtx};
 use crate::behavior::plugin::BehaviorManager;
 use crate::collision::{self, ContactMemory, World};
 use crate::dirty::{self, DIRTY_BUF_LEN};
@@ -9,44 +11,26 @@ use crate::stickman::geometry::floor_y;
 use crate::stickman::ir::{Actor, ClipId, PoseScratch};
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::geometry::Point;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::RgbColor;
 use embedded_graphics::primitives::Rectangle;
 
-/// Action selected by a screen tap's horizontal position.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TapAction {
-    FaceLeft,
-    FaceRight,
-    Random,
-}
-
-/// Map a display X coordinate to a left / center / right tap action.
-pub fn tap_action_for_x(x: u32, width: u32) -> TapAction {
-    let third = width / 3;
-    if x < third {
-        TapAction::FaceLeft
-    } else if x < third * 2 {
-        TapAction::Random
-    } else {
-        TapAction::FaceRight
-    }
-}
-
 /// Platform-independent stickman game.
 pub struct Game {
     behavior_mgr: BehaviorManager,
+    box_brain: BoxBrain,
     actor: Actor,
-    /// Static crate on the same layer and walk baseline as [`Self::actor`].
+    /// Crate on the same layer and walk baseline as [`Self::actor`].
     box_actor: Actor,
     prev_actor: Option<Actor>,
+    prev_box: Option<Actor>,
     prev_rect: Option<Rectangle>,
+    prev_box_rect: Option<Rectangle>,
     scratch: PoseScratch,
     box_scratch: PoseScratch,
-    /// Layer 0 has been painted; later frames only dirty-restore under the figure.
+    /// Layer 0 has been painted; later frames only dirty-restore under figures.
     background_drawn: bool,
-    /// Crate has been presented once (redrawn when a dirty tile overlaps it).
-    box_drawn: bool,
     /// Optional layer-0 backdrop (`'static` — embedded or leaked at startup).
     background: Option<Rgb565Image<'static>>,
     /// Scratch tile for flicker-free dirty presents (composed in RAM, one blit).
@@ -62,14 +46,16 @@ impl Game {
         box_actor.x = (DISPLAY_WIDTH as i32) * 3 / 4;
         Self {
             behavior_mgr: BehaviorManager::new(),
+            box_brain: BoxBrain::new(),
             actor: Actor::default(),
             box_actor,
             prev_actor: None,
+            prev_box: None,
             prev_rect: None,
+            prev_box_rect: None,
             scratch: PoseScratch::new(),
             box_scratch: PoseScratch::new(),
             background_drawn: false,
-            box_drawn: false,
             background: assets::embedded_background(),
             dirty_buf: [Rgb565::BLACK; DIRTY_BUF_LEN],
             contacts: ContactMemory::new(),
@@ -80,9 +66,10 @@ impl Game {
     pub fn set_background(&mut self, image: Rgb565Image<'static>) {
         self.background = Some(image);
         self.background_drawn = false;
-        self.box_drawn = false;
         self.prev_actor = None;
+        self.prev_box = None;
         self.prev_rect = None;
+        self.prev_box_rect = None;
     }
 
     /// True when a backdrop image is installed.
@@ -90,28 +77,61 @@ impl Game {
         self.background.is_some()
     }
 
-    /// Cycle to the next behavior (device BOOT button / sim Space).
+    /// Cycle to the next stickman behavior (device BOOT button / sim Space).
     pub fn on_cycle_input(&mut self) {
         self.behavior_mgr.cycle_next(&mut self.actor);
     }
 
-    /// Handle a positioned tap: left/right thirds change facing; center picks a
-    /// random other behavior.
-    pub fn on_tap(&mut self, x: u32) {
-        match tap_action_for_x(x, DISPLAY_WIDTH) {
-            TapAction::FaceLeft => self.actor.facing_left = true,
-            TapAction::FaceRight => self.actor.facing_left = false,
-            TapAction::Random => self.behavior_mgr.cycle_random(&mut self.actor, x),
+    /// Hit-test tap: the entity under the point rolls its tap table.
+    /// Empty space picks a random stickman behavior.
+    pub fn on_tap(&mut self, x: u32, y: u32) {
+        eval::sample(&self.actor, &mut self.scratch);
+        eval::sample(&self.box_actor, &mut self.box_scratch);
+        let p = Point::new(x as i32, y as i32);
+        let on_stick = collision::contains_point(eval::hitbox(&self.scratch), p);
+        let on_box = collision::contains_point(eval::hitbox(&self.box_scratch), p);
+        let entropy = x ^ y.wrapping_shl(16);
+        if on_stick {
+            self.behavior_mgr
+                .on_event(&mut self.actor, Event::Tap, EventCtx::default(), entropy);
+        } else if on_box {
+            self.box_brain.on_event(
+                &mut self.box_actor,
+                Event::Tap,
+                EventCtx::default(),
+                entropy,
+            );
+        } else {
+            self.behavior_mgr.cycle_random(&mut self.actor, entropy);
         }
     }
 
     pub fn update(&mut self, delta_ms: u64) {
-        self.behavior_mgr.update(delta_ms, &mut self.actor);
-        eval::sample(&self.actor, &mut self.scratch);
-        eval::sample(&self.box_actor, &mut self.box_scratch);
+        let stick_fin = self.behavior_mgr.update(delta_ms, &mut self.actor);
+        let box_fin = self.box_brain.update(delta_ms, &mut self.box_actor);
+        let stick_chained = if stick_fin {
+            self.behavior_mgr.on_event(
+                &mut self.actor,
+                Event::BehaviorFinished,
+                EventCtx::default(),
+                delta_ms as u32,
+            )
+        } else {
+            false
+        };
+        if box_fin {
+            self.box_brain.on_event(
+                &mut self.box_actor,
+                Event::BehaviorFinished,
+                EventCtx::default(),
+                delta_ms as u32,
+            );
+        }
+
+        self.sample_poses();
         let hit_a = eval::hitbox(&self.scratch);
         let hit_b = eval::hitbox(&self.box_scratch);
-        collision::resolve(
+        let hits = collision::resolve(
             &mut [(&mut self.actor, hit_a), (&mut self.box_actor, hit_b)],
             &mut self.contacts,
             World {
@@ -120,17 +140,71 @@ impl Game {
                 baseline_y: floor_y(),
             },
         );
+
+        let entropy = delta_ms as u32;
+        let ctx_stick = EventCtx {
+            collision: hits.kind[0],
+            other_x: Some(self.box_actor.x),
+            other_facing_left: Some(self.box_actor.facing_left),
+        };
+        let ctx_box = EventCtx {
+            collision: hits.kind[1],
+            other_x: Some(self.actor.x),
+            other_facing_left: Some(self.actor.facing_left),
+        };
+        let ctx_model = EventCtx {
+            collision: Some(collision::CollisionKind::Model),
+            other_x: Some(self.actor.x),
+            other_facing_left: Some(self.actor.facing_left),
+        };
+        let ctx_model_from_box = EventCtx {
+            collision: Some(collision::CollisionKind::Model),
+            other_x: Some(self.box_actor.x),
+            other_facing_left: Some(self.box_actor.facing_left),
+        };
+        if hits.body_entered(0) {
+            self.behavior_mgr
+                .on_event(&mut self.actor, Event::Collision, ctx_stick, entropy ^ 0xA);
+        }
+        if hits.body_entered(1) {
+            self.box_brain.on_event(
+                &mut self.box_actor,
+                Event::Collision,
+                ctx_box,
+                entropy ^ 0xB,
+            );
+        } else if (stick_fin || box_fin) && !hits.model_enter && self.contacts.models_overlap(0, 1)
+        {
+            if !stick_chained {
+                self.behavior_mgr.on_event(
+                    &mut self.actor,
+                    Event::Collision,
+                    ctx_model_from_box,
+                    entropy ^ 0xC,
+                );
+            }
+            self.box_brain.on_event(
+                &mut self.box_actor,
+                Event::Collision,
+                ctx_model,
+                entropy ^ 0xD,
+            );
+        }
     }
 
-    /// True when the displayed pose already matches the current actor.
-    ///
-    /// When animation is paused (e.g. idle), the AMOLED can keep showing the
-    /// last image with no further QSPI traffic.
+    fn sample_poses(&mut self) {
+        eval::sample(&self.actor, &mut self.scratch);
+        eval::sample(&self.box_actor, &mut self.box_scratch);
+    }
+
+    /// True when the displayed poses already match the current actors.
     pub fn is_frame_static(&self) -> bool {
-        self.background_drawn && self.box_drawn && self.prev_actor.as_ref() == Some(&self.actor)
+        self.background_drawn
+            && self.prev_actor.as_ref() == Some(&self.actor)
+            && self.prev_box.as_ref() == Some(&self.box_actor)
     }
 
-    /// Draw the current frame if the pose changed.
+    /// Draw the current frame if a pose changed.
     ///
     /// After the initial layer-0 paint, updates are composed into a dirty tile
     /// in RAM and pushed with one `fill_contiguous`.
@@ -147,38 +221,102 @@ impl Game {
             self.background_drawn = true;
         }
 
-        eval::sample(&self.actor, &mut self.scratch);
-        eval::sample(&self.box_actor, &mut self.box_scratch);
+        self.sample_poses();
+        let new_stick = eval::dirty_rect(&self.scratch);
+        let new_box = eval::dirty_rect(&self.box_scratch);
+        let stick_changed = self.prev_actor.as_ref() != Some(&self.actor);
+        let box_changed = self.prev_box.as_ref() != Some(&self.box_actor);
 
-        if !self.box_drawn {
-            let box_rect = eval::dirty_rect(&self.box_scratch);
+        if stick_changed && box_changed {
+            let area = union_optional(
+                union_optional(self.prev_rect, Some(new_stick)),
+                union_optional(self.prev_box_rect, Some(new_box)),
+            );
+            if let Some(area) = area {
+                if area.size.width <= dirty::DIRTY_MAX_W && area.size.height <= dirty::DIRTY_MAX_H {
+                    dirty::blit_composed_area(
+                        display,
+                        &mut self.dirty_buf,
+                        area,
+                        &self.scratch,
+                        &[&self.box_scratch],
+                        self.background.as_ref(),
+                        true,
+                    )?;
+                } else {
+                    dirty::present_actor_frame(
+                        display,
+                        &mut self.dirty_buf,
+                        self.prev_box_rect,
+                        &self.box_scratch,
+                        new_box,
+                        &[&self.scratch],
+                        self.background.as_ref(),
+                    )?;
+                    dirty::present_actor_frame(
+                        display,
+                        &mut self.dirty_buf,
+                        self.prev_rect,
+                        &self.scratch,
+                        new_stick,
+                        &[&self.box_scratch],
+                        self.background.as_ref(),
+                    )?;
+                }
+            }
+        } else if box_changed {
             dirty::present_actor_frame(
                 display,
                 &mut self.dirty_buf,
-                None,
+                self.prev_box_rect,
                 &self.box_scratch,
-                box_rect,
-                &[],
+                new_box,
+                &[&self.scratch],
                 self.background.as_ref(),
             )?;
-            self.box_drawn = true;
+        } else {
+            dirty::present_actor_frame(
+                display,
+                &mut self.dirty_buf,
+                self.prev_rect,
+                &self.scratch,
+                new_stick,
+                &[&self.box_scratch],
+                self.background.as_ref(),
+            )?;
         }
 
-        let new_rect = eval::dirty_rect(&self.scratch);
-        let prev_rect = self.prev_rect.take();
-        dirty::present_actor_frame(
-            display,
-            &mut self.dirty_buf,
-            prev_rect,
-            &self.scratch,
-            new_rect,
-            &[&self.box_scratch],
-            self.background.as_ref(),
-        )?;
-        self.prev_rect = Some(new_rect);
+        self.prev_rect = Some(new_stick);
+        self.prev_box_rect = Some(new_box);
         self.prev_actor = Some(self.actor);
+        self.prev_box = Some(self.box_actor);
         Ok(())
     }
+}
+
+fn union_optional(a: Option<Rectangle>, b: Option<Rectangle>) -> Option<Rectangle> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(r), None) | (None, Some(r)) => Some(r),
+        (Some(a), Some(b)) => Some(union_rects(a, b)),
+    }
+}
+
+fn union_rects(a: Rectangle, b: Rectangle) -> Rectangle {
+    if a.size.width == 0 || a.size.height == 0 {
+        return b;
+    }
+    if b.size.width == 0 || b.size.height == 0 {
+        return a;
+    }
+    let x0 = a.top_left.x.min(b.top_left.x);
+    let y0 = a.top_left.y.min(b.top_left.y);
+    let x1 = (a.top_left.x + a.size.width as i32).max(b.top_left.x + b.size.width as i32);
+    let y1 = (a.top_left.y + a.size.height as i32).max(b.top_left.y + b.size.height as i32);
+    Rectangle::new(
+        Point::new(x0, y0),
+        embedded_graphics::geometry::Size::new((x1 - x0) as u32, (y1 - y0) as u32),
+    )
 }
 
 impl Default for Game {
@@ -190,13 +328,8 @@ impl Default for Game {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tap_center_is_random_action() {
-        assert_eq!(tap_action_for_x(0, 536), TapAction::FaceLeft);
-        assert_eq!(tap_action_for_x(268, 536), TapAction::Random);
-        assert_eq!(tap_action_for_x(535, 536), TapAction::FaceRight);
-    }
+    use crate::behavior::box_beh::BoxBehaviorId;
+    use crate::stickman::library;
 
     #[test]
     fn box_shares_stickman_layer_and_baseline() {
@@ -205,16 +338,59 @@ mod tests {
         assert_eq!(game.box_actor.y, game.actor.y);
         assert_eq!(game.box_actor.clip, ClipId::BoxIdle);
         assert_ne!(game.box_actor.x, game.actor.x);
+        assert_eq!(game.box_brain.current(), BoxBehaviorId::Idle);
     }
 
     #[test]
-    fn update_flips_facing_when_models_overlap() {
+    fn tap_empty_space_picks_other_stickman_behavior() {
+        let mut game = Game::new();
+        let clip = game.actor.clip;
+        game.on_tap(1, 1);
+        assert_ne!(game.actor.clip, clip);
+        assert_eq!(game.box_actor.clip, ClipId::BoxIdle);
+    }
+
+    #[test]
+    fn tap_on_box_does_not_cycle_stickman() {
+        let mut game = Game::new();
+        game.actor.facing_left = true;
+        let stick_clip = game.actor.clip;
+        eval::sample(&game.box_actor, &mut game.box_scratch);
+        let hit = eval::hitbox(&game.box_scratch);
+        let x = hit.top_left.x as u32 + hit.size.width / 2;
+        let y = hit.top_left.y as u32 + hit.size.height / 2;
+        game.on_tap(x, y);
+        assert_eq!(game.actor.clip, stick_clip);
+        assert!(game.actor.facing_left);
+        assert!(matches!(
+            game.box_actor.clip,
+            ClipId::BoxIdle | ClipId::BoxSlide | ClipId::BoxRoll | ClipId::BoxShudder
+        ));
+    }
+
+    #[test]
+    fn update_overlap_keeps_box_species() {
         let mut game = Game::new();
         game.actor.x = game.box_actor.x;
-        game.actor.facing_left = false;
-        game.box_actor.facing_left = false;
         game.update(0);
-        assert!(game.actor.facing_left);
-        assert!(game.box_actor.facing_left);
+        let clip = library::clip(game.box_actor.clip);
+        assert!(core::ptr::eq(clip.species, &library::BOX));
+    }
+
+    #[test]
+    fn looping_walk_reports_finished_after_one_cycle() {
+        let mut actor = Actor::default();
+        actor.play(ClipId::Walk);
+        let d = library::clip(ClipId::Walk).duration_ms as u32;
+        assert!(!actor.advance(d - 1));
+        assert!(actor.advance(1));
+    }
+
+    #[test]
+    fn held_idle_never_reports_finished() {
+        let mut actor = Actor::default();
+        actor.play(ClipId::Idle);
+        assert!(!actor.advance(1000));
+        assert_eq!(actor.time_ms, 0);
     }
 }

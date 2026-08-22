@@ -2,7 +2,7 @@
 //!
 //! Input mapping:
 //!   Spacebar          → BOOT button (cycle behavior)
-//!   Left mouse click  → touch tap (left/right: face, center: random behavior)
+//!   Left mouse click  → touch tap (entity table, or random stickman if empty)
 //!   Escape / close    → quit
 //!
 //! Background: loads `assets/background.png` (preferred) or
@@ -13,13 +13,13 @@ use embedded_graphics::geometry::{OriginDimensions, Size};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use minifb::{Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
-use stickman::assets::{rgb888_to_rgb565_be, Rgb565Image};
-use stickman::game::Game;
-use stickman::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use stickman::assets::{rgb888_to_rgb565_be, Rgb565Image};
+use stickman::game::Game;
+use stickman::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 
 const FRAME_MS: u64 = 33;
 const MAX_DELTA_MS: u64 = 100;
@@ -87,13 +87,19 @@ impl DrawTarget for SimDisplay {
 fn asset_candidates(file_name: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     // Prefer the crate root so `make sim` works regardless of cwd quirks.
-    paths.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(file_name));
+    paths.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join(file_name),
+    );
     paths.push(Path::new("assets").join(file_name));
     paths
 }
 
 fn first_existing(file_name: &str) -> Option<PathBuf> {
-    asset_candidates(file_name).into_iter().find(|p| p.is_file())
+    asset_candidates(file_name)
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 fn leak_pixels(pixels: Vec<u8>) -> &'static [u8] {
@@ -153,8 +159,7 @@ fn load_background_png(path: &Path) -> Result<Rgb565Image<'static>, String> {
 fn load_background_rgb565(path: &Path) -> Result<Rgb565Image<'static>, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let leaked = leak_pixels(bytes);
-    Rgb565Image::from_sm65(leaked)
-        .ok_or_else(|| format!("invalid SM65 image: {}", path.display()))
+    Rgb565Image::from_sm65(leaked).ok_or_else(|| format!("invalid SM65 image: {}", path.display()))
 }
 
 fn load_sim_background() -> Option<Rgb565Image<'static>> {
@@ -196,7 +201,7 @@ fn main() {
     let height = DISPLAY_HEIGHT as usize;
 
     let mut window = Window::new(
-        "Stickman Sim — Click L/R face · Center random · Space cycle · Esc quit",
+        "Stickman Sim — Click entity / empty random · Space cycle · Esc quit",
         width,
         height,
         WindowOptions {
@@ -230,7 +235,7 @@ fn main() {
 
     println!("Stickman simulation running.");
     println!("  Spacebar         → cycle behavior (BOOT button)");
-    println!("  Left mouse click → left/right face, center random behavior (touch)");
+    println!("  Left mouse click → tap entity (table) or empty (random stickman)");
     println!("  Auto             → random other behavior within 5s (input resets the timer)");
     println!("  Escape / close   → quit");
 
@@ -248,8 +253,9 @@ fn main() {
 
         let mouse = window.get_mouse_down(MouseButton::Left);
         if mouse && !prev_mouse {
-            if let Some((x, _)) = window.get_mouse_pos(MouseMode::Clamp) {
-                game.on_tap(x as u32);
+            if let Some((x, y)) = window.get_mouse_pos(MouseMode::Clamp) {
+                // Scale::X2 window; convert to display pixels.
+                game.on_tap((x as u32) / 2, (y as u32) / 2);
             }
         }
         prev_mouse = mouse;

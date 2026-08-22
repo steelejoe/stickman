@@ -4,7 +4,6 @@
 //! [`PoseScratch`] in [`crate::game::Game`]. Clips interpolate joint angles;
 //! world logic (bounce, facing, jump height) stays in Rust behaviors.
 
-use crate::collision::CollisionPolicy;
 use crate::layer::LayerId;
 use crate::stickman::geometry::floor_y;
 use crate::DISPLAY_WIDTH;
@@ -23,7 +22,11 @@ pub enum ClipId {
     SwordCrouchStab,
     Knockback,
     Tumble,
+    Flip,
     BoxIdle,
+    BoxSlide,
+    BoxRoll,
+    BoxShudder,
 }
 
 /// Compile-time cap for one species. Scratch is sized to this, not clip count.
@@ -128,9 +131,12 @@ pub struct Clip {
 }
 
 impl Clip {
-    /// No motion channels and no travel — idle / held poses.
+    /// Held pose: `Once`, no motion channels, no travel. Looping clips always tick.
     pub fn is_static(&self) -> bool {
-        self.tracks.is_empty() && self.travel_dx == 0 && self.spin == Spin::None
+        self.loop_mode == LoopMode::Once
+            && self.tracks.is_empty()
+            && self.travel_dx == 0
+            && self.spin == Spin::None
     }
 }
 
@@ -143,8 +149,6 @@ pub struct Actor {
     pub layer: LayerId,
     pub clip: ClipId,
     pub time_ms: u32,
-    /// Outcomes when this actor enters a contact. See [`CollisionPolicy::default`].
-    pub collision: CollisionPolicy,
     travel_rem: i32,
 }
 
@@ -157,7 +161,6 @@ impl Default for Actor {
             layer: LayerId::Middle,
             clip: ClipId::Walk,
             time_ms: 0,
-            collision: CollisionPolicy::default(),
             travel_rem: 0,
         }
     }
@@ -170,14 +173,26 @@ impl Actor {
         self.travel_rem = 0;
     }
 
-    /// Advance clip time. Static clips keep `time_ms` at 0 so idle can skip draws.
-    pub fn advance(&mut self, dt_ms: u32) {
+    /// Advance clip time. Returns true when a looping clip wrapped a cycle.
+    /// Held / `Once` poses never report finished.
+    pub fn advance(&mut self, dt_ms: u32) -> bool {
         let clip = crate::stickman::library::clip(self.clip);
-        if clip.is_static() {
-            self.time_ms = 0;
-            return;
+        if clip.loop_mode != LoopMode::Loop {
+            if clip.is_static() {
+                self.time_ms = 0;
+            } else {
+                self.time_ms = wrap_time(self.time_ms.saturating_add(dt_ms), clip);
+            }
+            return false;
         }
-        self.time_ms = wrap_time(self.time_ms.saturating_add(dt_ms), clip);
+        let d = clip.duration_ms as u32;
+        if d == 0 {
+            return false;
+        }
+        let next = self.time_ms.saturating_add(dt_ms);
+        let finished = next >= d;
+        self.time_ms = next % d;
+        finished
     }
 
     /// Pixels to add to `x` this tick from [`Clip::travel_dx`].
@@ -206,6 +221,8 @@ pub struct PoseScratch {
     pub origin: [embedded_graphics::geometry::Point; MAX_BONES],
     pub tip: [embedded_graphics::geometry::Point; MAX_BONES],
     pub visible: [bool; MAX_BONES],
+    /// Signed body spin (degrees) after facing. Used to rotate box rects.
+    pub spin_deg: i32,
 }
 
 impl PoseScratch {
@@ -216,6 +233,7 @@ impl PoseScratch {
             origin: [embedded_graphics::geometry::Point::new(0, 0); MAX_BONES],
             tip: [embedded_graphics::geometry::Point::new(0, 0); MAX_BONES],
             visible: [false; MAX_BONES],
+            spin_deg: 0,
         }
     }
 }

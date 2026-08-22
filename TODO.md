@@ -62,8 +62,13 @@ TODOs:
 - [x] Add collision support (maybe calculated when drawing for more precision)
 - [ ] Behaviors that control scale (and richer rotation beyond roll modes)
 - [ ] Optional: attach behaviors to non-stickman images / sprites
-- [ ] Behavior self-transitions / timed sequences (beyond tap-to-cycle)
-- [ ] Add chained action probability functions - e.g I could push the box when colliding with it
+- [x] Behavior self-transitions / timed sequences (beyond tap-to-cycle)
+- [x] Add chained action probability functions - e.g I could push the box when colliding with it
+  - Events: tap (hit-test), collision (enter + still-overlapping after finish), behavior-finished (looping clips only)
+  - Tables: kind × current behavior × event; both entities roll on collision
+  - Box: idle (favored), slide, roll, shudder — real clips/loco
+  - Flip facing is a stickman behavior; tables own facing
+  - Empty tap → random stickman behavior
 - [ ] Should I add friction? i.e. how slow does box move when pushed
 - [ ] Raised baseline - what happens when I collide with top of something e.g. a box?
 - [ ] Gravity - what happens when I step off of box?

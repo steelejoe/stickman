@@ -1,6 +1,6 @@
 //! Application state, main loop, and input handling (device build).
 
-use crate::game::{tap_action_for_x, Game};
+use crate::game::Game;
 use crate::hardware::buttons::Button;
 use crate::hardware::touch::Cst816Touch;
 use embedded_graphics::pixelcolor::Rgb565;
@@ -97,7 +97,7 @@ impl App {
                 }
                 match touch.read() {
                     Ok(_) => esp_println::println!(
-                        "Touch: CST816 ready (left/right: face, center: random behavior)"
+                        "Touch: CST816 ready (tap an entity; empty space: random stickman)"
                     ),
                     Err(_) => esp_println::println!(
                         "Touch: probe failed at boot; taps may still work after contact"
@@ -130,7 +130,7 @@ impl App {
     pub fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
-            "Tap left/right to face; center tap picks a random other behavior (resets auto-switch); BOOT cycles: walk → idle → jump → crouch → search → begging → sword → stab → crouch-sword → crouch-stab → knockback → tumble. Behaviors also change on their own within 5s."
+            "Tap an entity to roll its table; empty tap picks a random stickman behavior. BOOT cycles stickman behaviors. Looping clips roll a finished table after each cycle."
         );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);
@@ -142,12 +142,10 @@ impl App {
             last_tick = frame_start;
             let delta_ms = elapsed.min(MAX_DELTA_MS).max(1);
 
-            // Positioned touch tap: left/right face, center picks a random other behavior.
             if let Some(ref mut touch) = self.touch {
                 if let Some(point) = touch.poll_tap() {
-                    let action = tap_action_for_x(point.x as u32, DISPLAY_WIDTH);
-                    esp_println::println!("Touch: ({}, {}) -> {:?}", point.x, point.y, action);
-                    self.game.on_tap(point.x as u32);
+                    esp_println::println!("Touch: ({}, {})", point.x, point.y);
+                    self.game.on_tap(point.x as u32, point.y as u32);
                 }
             }
             // BOOT button → next behavior (no position).

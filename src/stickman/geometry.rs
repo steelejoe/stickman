@@ -1,5 +1,7 @@
 //! Floor placement and integer trig for FK / spin.
 
+use embedded_graphics::geometry::Point;
+
 /// Pixels above the bottom of the display for the floor line.
 const FLOOR_MARGIN: i32 = 18;
 
@@ -25,6 +27,33 @@ pub fn sin_cos_deg_milli(deg: i32) -> (i32, i32) {
     let s = sin_deg_milli(deg);
     let c = sin_deg_milli(deg + 90);
     (s, c)
+}
+
+/// Axis-aligned rect corners (bottom-center origin), then optional spin about
+/// the geometric center. Order: top-left, top-right, bottom-right, bottom-left.
+pub fn rect_corners(origin: Point, width: u32, height: u32, spin_deg: i32) -> [Point; 4] {
+    let hw = width as i32 / 2;
+    let h = height as i32;
+    let pts = [
+        (origin.x - hw, origin.y - h),
+        (origin.x + hw, origin.y - h),
+        (origin.x + hw, origin.y),
+        (origin.x - hw, origin.y),
+    ];
+    if spin_deg == 0 {
+        return [
+            Point::new(pts[0].0, pts[0].1),
+            Point::new(pts[1].0, pts[1].1),
+            Point::new(pts[2].0, pts[2].1),
+            Point::new(pts[3].0, pts[3].1),
+        ];
+    }
+    let pivot = (origin.x, origin.y - h / 2);
+    let rot = |p: (i32, i32)| {
+        let (x, y) = rotate_point_cw(p, pivot, spin_deg);
+        Point::new(x, y)
+    };
+    [rot(pts[0]), rot(pts[1]), rot(pts[2]), rot(pts[3])]
 }
 
 /// Rotate `p` around `origin` by `deg` degrees clockwise (screen y-down).

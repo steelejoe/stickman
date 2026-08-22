@@ -1,10 +1,11 @@
 //! Configurable AABB collision against models, display edges, and the baseline.
 //!
-//! Responses fire on **enter** (new contact this tick) so a lasting overlap
-//! does not flip facing every frame. Each [`Actor`] carries its own
-//! [`CollisionPolicy`].
+//! Contacts fire on **enter** (new contact this tick) so a lasting overlap
+//! does not re-trigger every frame. Facing and other reactions are owned by
+//! behavior tables; this module only reports hits and keeps bodies on-screen.
 
 use crate::stickman::ir::Actor;
+use embedded_graphics::geometry::Point;
 use embedded_graphics::primitives::Rectangle;
 
 /// What was hit.
@@ -16,55 +17,6 @@ pub enum CollisionKind {
     EdgeTop,
     EdgeBottom,
     Baseline,
-}
-
-/// What to do when a [`CollisionKind`] is entered.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CollisionResponse {
-    /// Ignore the contact.
-    #[default]
-    None,
-    /// Toggle [`Actor::facing_left`]. Left/right (and top/bottom) edges also
-    /// push the actor back so the hitbox sits on the display bound.
-    FlipFacing,
-}
-
-/// Per-kind outcomes. Defaults match the world rules:
-/// model + left/right edges flip facing; baseline + top/bottom do nothing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CollisionPolicy {
-    pub on_model: CollisionResponse,
-    pub on_edge_left: CollisionResponse,
-    pub on_edge_right: CollisionResponse,
-    pub on_edge_top: CollisionResponse,
-    pub on_edge_bottom: CollisionResponse,
-    pub on_baseline: CollisionResponse,
-}
-
-impl Default for CollisionPolicy {
-    fn default() -> Self {
-        Self {
-            on_model: CollisionResponse::FlipFacing,
-            on_edge_left: CollisionResponse::FlipFacing,
-            on_edge_right: CollisionResponse::FlipFacing,
-            on_edge_top: CollisionResponse::None,
-            on_edge_bottom: CollisionResponse::None,
-            on_baseline: CollisionResponse::None,
-        }
-    }
-}
-
-impl CollisionPolicy {
-    pub fn response(self, kind: CollisionKind) -> CollisionResponse {
-        match kind {
-            CollisionKind::Model => self.on_model,
-            CollisionKind::EdgeLeft => self.on_edge_left,
-            CollisionKind::EdgeRight => self.on_edge_right,
-            CollisionKind::EdgeTop => self.on_edge_top,
-            CollisionKind::EdgeBottom => self.on_edge_bottom,
-            CollisionKind::Baseline => self.on_baseline,
-        }
-    }
 }
 
 /// Display and floor used as colliders.
@@ -96,14 +48,47 @@ impl ContactMemory {
             pairs: 0,
         }
     }
+
+    pub fn models_overlap(&self, i: usize, j: usize) -> bool {
+        self.pairs & pair_bit(i, j) != 0
+    }
+}
+
+/// Who entered a contact this tick.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CollisionHits {
+    pub entered: u8,
+    pub model_enter: bool,
+    pub kind: [Option<CollisionKind>; MAX_BODIES],
+}
+
+impl CollisionHits {
+    pub fn body_entered(self, i: usize) -> bool {
+        self.entered & (1 << i) != 0
+    }
+
+    fn mark(&mut self, i: usize, kind: CollisionKind) {
+        self.entered |= 1 << i;
+        if kind == CollisionKind::Model {
+            self.model_enter = true;
+            self.kind[i] = Some(CollisionKind::Model);
+        } else if self.kind[i].is_none() {
+            self.kind[i] = Some(kind);
+        }
+    }
 }
 
 /// Apply world and model collisions. `bodies` are (actor, unpadded hitbox).
 ///
 /// Same-layer models are tested against each other. At most 4 bodies
-/// are considered.
-pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, world: World) {
+/// are considered. Left/right edges always separate so walkers stay on screen.
+pub fn resolve(
+    bodies: &mut [(&mut Actor, Rectangle)],
+    mem: &mut ContactMemory,
+    world: World,
+) -> CollisionHits {
     let n = bodies.len().min(MAX_BODIES);
+    let mut hits = CollisionHits::default();
 
     for i in 0..n {
         for j in (i + 1)..n {
@@ -112,8 +97,8 @@ pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, 
             let bit = pair_bit(i, j);
             let was = mem.pairs & bit != 0;
             if overlap && !was {
-                apply_response(bodies[i].0, bodies[i].0.collision.on_model);
-                apply_response(bodies[j].0, bodies[j].0.collision.on_model);
+                hits.mark(i, CollisionKind::Model);
+                hits.mark(j, CollisionKind::Model);
             }
             if overlap {
                 mem.pairs |= bit;
@@ -139,6 +124,8 @@ pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, 
             CollisionKind::EdgeLeft,
             left,
             prev & F_LEFT != 0,
+            i,
+            &mut hits,
         );
         enter_edge(
             bodies[i].0,
@@ -147,6 +134,8 @@ pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, 
             CollisionKind::EdgeRight,
             right,
             prev & F_RIGHT != 0,
+            i,
+            &mut hits,
         );
         enter_edge(
             bodies[i].0,
@@ -155,6 +144,8 @@ pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, 
             CollisionKind::EdgeTop,
             top,
             prev & F_TOP != 0,
+            i,
+            &mut hits,
         );
         enter_edge(
             bodies[i].0,
@@ -163,6 +154,8 @@ pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, 
             CollisionKind::EdgeBottom,
             bottom,
             prev & F_BOTTOM != 0,
+            i,
+            &mut hits,
         );
         enter_edge(
             bodies[i].0,
@@ -171,6 +164,8 @@ pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, 
             CollisionKind::Baseline,
             baseline,
             prev & F_BASE != 0,
+            i,
+            &mut hits,
         );
 
         mem.edges[i] = (u8::from(left) * F_LEFT)
@@ -179,6 +174,11 @@ pub fn resolve(bodies: &mut [(&mut Actor, Rectangle)], mem: &mut ContactMemory, 
             | (u8::from(bottom) * F_BOTTOM)
             | (u8::from(baseline) * F_BASE);
     }
+    hits
+}
+
+pub fn contains_point(r: Rectangle, p: Point) -> bool {
+    p.x >= r.top_left.x && p.y >= r.top_left.y && p.x < max_x(r) && p.y < max_y(r)
 }
 
 fn enter_edge(
@@ -188,19 +188,16 @@ fn enter_edge(
     kind: CollisionKind,
     touching: bool,
     was: bool,
+    index: usize,
+    hits: &mut CollisionHits,
 ) {
-    if touching && !was {
-        let response = actor.collision.response(kind);
-        apply_response(actor, response);
-        if response == CollisionResponse::FlipFacing {
+    if touching {
+        if matches!(kind, CollisionKind::EdgeLeft | CollisionKind::EdgeRight) {
             separate_from_edge(actor, hit, world, kind);
         }
-    }
-}
-
-fn apply_response(actor: &mut Actor, response: CollisionResponse) {
-    if response == CollisionResponse::FlipFacing {
-        actor.facing_left = !actor.facing_left;
+        if !was {
+            hits.mark(index, kind);
+        }
     }
 }
 
@@ -261,99 +258,67 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_flips_model_and_horizontal_edges() {
-        let p = CollisionPolicy::default();
-        assert_eq!(p.on_model, CollisionResponse::FlipFacing);
-        assert_eq!(p.on_edge_left, CollisionResponse::FlipFacing);
-        assert_eq!(p.on_edge_right, CollisionResponse::FlipFacing);
-        assert_eq!(p.on_edge_top, CollisionResponse::None);
-        assert_eq!(p.on_edge_bottom, CollisionResponse::None);
-        assert_eq!(p.on_baseline, CollisionResponse::None);
-    }
-
-    #[test]
-    fn left_edge_enter_flips_and_separates() {
+    fn left_edge_enter_separates_without_flipping() {
         let mut a = actor(5, true);
         let mut mem = ContactMemory::new();
-        resolve(&mut [(&mut a, rect(-4, 50, 20, 20))], &mut mem, world());
-        assert!(!a.facing_left);
-        assert_eq!(a.x, 9);
-        resolve(&mut [(&mut a, rect(0, 50, 20, 20))], &mut mem, world());
-        assert!(!a.facing_left);
-        assert_eq!(a.x, 9);
-    }
-
-    #[test]
-    fn left_edge_none_does_not_flip_or_separate() {
-        let mut a = actor(5, true);
-        a.collision.on_edge_left = CollisionResponse::None;
-        let mut mem = ContactMemory::new();
-        resolve(&mut [(&mut a, rect(-4, 50, 20, 20))], &mut mem, world());
+        let hits = resolve(&mut [(&mut a, rect(-4, 50, 20, 20))], &mut mem, world());
         assert!(a.facing_left);
-        assert_eq!(a.x, 5);
+        assert_eq!(a.x, 9);
+        assert!(hits.body_entered(0));
+        assert_eq!(hits.kind[0], Some(CollisionKind::EdgeLeft));
+        resolve(&mut [(&mut a, rect(0, 50, 20, 20))], &mut mem, world());
+        assert!(a.facing_left);
+        assert_eq!(a.x, 9);
     }
 
     #[test]
-    fn right_edge_enter_flips_to_face_left() {
+    fn right_edge_enter_separates_without_flipping() {
         let mut a = actor(190, false);
         let mut mem = ContactMemory::new();
         resolve(&mut [(&mut a, rect(190, 50, 20, 20))], &mut mem, world());
-        assert!(a.facing_left);
+        assert!(!a.facing_left);
         assert_eq!(a.x, 180);
     }
 
     #[test]
-    fn top_and_bottom_default_do_nothing() {
+    fn right_edge_stay_still_separates() {
+        let mut a = actor(190, false);
+        let mut mem = ContactMemory::new();
+        resolve(&mut [(&mut a, rect(190, 50, 20, 20))], &mut mem, world());
+        assert_eq!(a.x, 180);
+        a.x = 210;
+        let hits = resolve(&mut [(&mut a, rect(210, 50, 20, 20))], &mut mem, world());
+        assert!(!hits.body_entered(0));
+        assert_eq!(a.x, 180);
+    }
+
+    #[test]
+    fn top_and_bottom_default_do_not_separate() {
         let mut a = actor(50, false);
         let mut mem = ContactMemory::new();
         resolve(&mut [(&mut a, rect(40, -2, 20, 20))], &mut mem, world());
-        assert!(!a.facing_left);
         assert_eq!(a.y, 80);
         resolve(&mut [(&mut a, rect(40, 90, 20, 20))], &mut mem, world());
-        assert!(!a.facing_left);
         assert_eq!(a.y, 80);
     }
 
     #[test]
-    fn baseline_default_does_nothing() {
-        let mut a = actor(50, true);
-        let mut mem = ContactMemory::new();
-        resolve(&mut [(&mut a, rect(40, 60, 20, 20))], &mut mem, world());
-        assert!(a.facing_left);
-        assert_eq!(a.y, 80);
-    }
-
-    #[test]
-    fn model_enter_flips_both_stay_does_not() {
+    fn model_enter_reports_both_stay_does_not() {
         let mut a = actor(40, false);
         let mut b = actor(60, true);
         let mut mem = ContactMemory::new();
         let ha = rect(30, 60, 20, 20);
         let hb = rect(40, 60, 20, 20);
-        resolve(&mut [(&mut a, ha), (&mut b, hb)], &mut mem, world());
-        assert!(a.facing_left);
-        assert!(!b.facing_left);
-        resolve(&mut [(&mut a, ha), (&mut b, hb)], &mut mem, world());
-        assert!(a.facing_left);
-        assert!(!b.facing_left);
-    }
-
-    #[test]
-    fn model_policy_none_skips_that_actor() {
-        let mut a = actor(40, false);
-        let mut b = actor(60, true);
-        b.collision.on_model = CollisionResponse::None;
-        let mut mem = ContactMemory::new();
-        resolve(
-            &mut [
-                (&mut a, rect(30, 60, 20, 20)),
-                (&mut b, rect(40, 60, 20, 20)),
-            ],
-            &mut mem,
-            world(),
-        );
-        assert!(a.facing_left);
+        let hits = resolve(&mut [(&mut a, ha), (&mut b, hb)], &mut mem, world());
+        assert!(!a.facing_left);
         assert!(b.facing_left);
+        assert!(hits.model_enter);
+        assert!(hits.body_entered(0));
+        assert!(hits.body_entered(1));
+        let stay = resolve(&mut [(&mut a, ha), (&mut b, hb)], &mut mem, world());
+        assert!(!stay.model_enter);
+        assert!(!stay.body_entered(0));
+        assert!(mem.models_overlap(0, 1));
     }
 
     #[test]
@@ -362,7 +327,7 @@ mod tests {
         let mut b = actor(60, true);
         b.layer = LayerId::Foreground;
         let mut mem = ContactMemory::new();
-        resolve(
+        let hits = resolve(
             &mut [
                 (&mut a, rect(30, 60, 20, 20)),
                 (&mut b, rect(40, 60, 20, 20)),
@@ -370,7 +335,17 @@ mod tests {
             &mut mem,
             world(),
         );
+        assert!(!hits.model_enter);
         assert!(!a.facing_left);
         assert!(b.facing_left);
+    }
+
+    #[test]
+    fn contains_point_matches_half_open_rect() {
+        let r = rect(10, 20, 5, 5);
+        assert!(contains_point(r, Point::new(10, 20)));
+        assert!(contains_point(r, Point::new(14, 24)));
+        assert!(!contains_point(r, Point::new(15, 20)));
+        assert!(!contains_point(r, Point::new(10, 25)));
     }
 }

@@ -156,7 +156,7 @@ pub static STICKMAN: Species = Species {
     ],
 };
 
-/// Static crate on the walk baseline. One rect bone, no motion tracks.
+/// Crate on the walk baseline. One rect bone; motion lives in the box clips.
 pub static BOX: Species = Species {
     bones: &[Bone {
         parent: -1,
@@ -583,6 +583,58 @@ static BOX_IDLE: Clip = Clip {
     tracks: &[],
 };
 
+const BOX_SLIDE_MS: u16 = 800;
+const BOX_SLIDE_DX: i16 = 40;
+const BOX_ROLL_DX: i16 = 50;
+const SHUDDER_MS: u16 = 400;
+const FLIP_MS: u16 = 300;
+
+/// Short looping turn; facing is toggled when the behavior starts.
+static FLIP: Clip = Clip {
+    species: &STICKMAN,
+    duration_ms: FLIP_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: &[track!(ROOT, Tx, (0, 0, Hold))],
+};
+
+static BOX_SLIDE: Clip = Clip {
+    species: &BOX,
+    duration_ms: BOX_SLIDE_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: BOX_SLIDE_DX,
+    spin: Spin::None,
+    tracks: &[],
+};
+
+static BOX_ROLL: Clip = Clip {
+    species: &BOX,
+    duration_ms: WALK_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: BOX_ROLL_DX,
+    spin: Spin::Tumble,
+    tracks: &[track!(ROOT, Spin, (0, 0, Lerp), (WALK_MS, 360, Lerp))],
+};
+
+static BOX_SHUDDER: Clip = Clip {
+    species: &BOX,
+    duration_ms: SHUDDER_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: &[track!(
+        ROOT,
+        Tx,
+        (0, 0, Lerp),
+        (80, -4, Lerp),
+        (160, 4, Lerp),
+        (240, -4, Lerp),
+        (320, 4, Lerp),
+        (400, 0, Lerp)
+    )],
+};
+
 static TUMBLE: Clip = Clip {
     species: &STICKMAN,
     duration_ms: WALK_MS,
@@ -620,7 +672,11 @@ pub fn clip(id: ClipId) -> &'static Clip {
         ClipId::SwordCrouchStab => &SWORD_CROUCH_STAB,
         ClipId::Knockback => &KNOCKBACK,
         ClipId::Tumble => &TUMBLE,
+        ClipId::Flip => &FLIP,
         ClipId::BoxIdle => &BOX_IDLE,
+        ClipId::BoxSlide => &BOX_SLIDE,
+        ClipId::BoxRoll => &BOX_ROLL,
+        ClipId::BoxShudder => &BOX_SHUDDER,
     }
 }
 
@@ -633,6 +689,17 @@ mod tests {
         assert_eq!(WALK.travel_dx, TRAVEL_DX);
         assert_eq!(TUMBLE.travel_dx, TRAVEL_DX);
         assert_eq!(KNOCKBACK.travel_dx, -TRAVEL_DX);
+    }
+
+    #[test]
+    fn box_motion_clips_loop() {
+        assert_eq!(BOX_SLIDE.loop_mode, LoopMode::Loop);
+        assert_eq!(BOX_ROLL.loop_mode, LoopMode::Loop);
+        assert_eq!(BOX_SHUDDER.loop_mode, LoopMode::Loop);
+        assert!(BOX_SLIDE.travel_dx > 0);
+        assert!(BOX_ROLL.travel_dx > 0);
+        assert_eq!(BOX_ROLL.spin, Spin::Tumble);
+        assert_eq!(BOX_IDLE.loop_mode, LoopMode::Once);
     }
 
     #[test]

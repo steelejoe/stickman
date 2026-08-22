@@ -1,6 +1,6 @@
 //! Evaluate a clip into world-space bone tips.
 
-use crate::stickman::geometry::{rotate_point_cw, sin_cos_deg_milli};
+use crate::stickman::geometry::{self, rotate_point_cw, sin_cos_deg_milli};
 use crate::stickman::ir::{
     sample_track, wrap_time, Actor, BoneKind, LoopMode, PoseScratch, Prop, Spin, MAX_BONES,
 };
@@ -74,24 +74,25 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
     }
 
     let hip = library::HIP as usize;
-    if clip.spin != Spin::None && spin_deg != 0 && n > hip {
-        let signed = match clip.spin {
-            Spin::Knockback => {
-                if actor.facing_left {
-                    spin_deg
-                } else {
-                    -spin_deg
-                }
+    let signed = match clip.spin {
+        Spin::Knockback => {
+            if actor.facing_left {
+                spin_deg
+            } else {
+                -spin_deg
             }
-            Spin::Tumble => {
-                if actor.facing_left {
-                    -spin_deg
-                } else {
-                    spin_deg
-                }
+        }
+        Spin::Tumble => {
+            if actor.facing_left {
+                -spin_deg
+            } else {
+                spin_deg
             }
-            Spin::None => 0,
-        };
+        }
+        Spin::None => 0,
+    };
+    out.spin_deg = signed;
+    if clip.spin != Spin::None && signed != 0 && n > hip {
         let pivot = (out.tip[hip].x, out.tip[hip].y);
         for i in 0..n {
             let o = rotate_point_cw((out.origin[i].x, out.origin[i].y), pivot, signed);
@@ -129,9 +130,17 @@ fn contact_lowest_y(out: &PoseScratch) -> Option<i32> {
     for i in 0..n {
         lowest = lowest.max(out.origin[i].y).max(out.tip[i].y);
         if let Some(species) = out.species {
-            if let BoneKind::Circle { diameter } = species.bones[i].kind {
-                let r = (diameter as i32 + 1) / 2;
-                lowest = lowest.max(out.tip[i].y + r);
+            match species.bones[i].kind {
+                BoneKind::Circle { diameter } => {
+                    let r = (diameter as i32 + 1) / 2;
+                    lowest = lowest.max(out.tip[i].y + r);
+                }
+                BoneKind::Rect { width, height } => {
+                    for p in geometry::rect_corners(out.origin[i], width, height, out.spin_deg) {
+                        lowest = lowest.max(p.y);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -232,25 +241,9 @@ fn visible_aabb(pose: &PoseScratch) -> Option<(i32, i32, i32, i32)> {
                 );
             }
             BoneKind::Rect { width, height } => {
-                let o = pose.origin[i];
-                let hw = width as i32 / 2;
-                let h = height as i32;
-                include_point(
-                    &mut any,
-                    &mut min_x,
-                    &mut min_y,
-                    &mut max_x,
-                    &mut max_y,
-                    Point::new(o.x - hw, o.y - h),
-                );
-                include_point(
-                    &mut any,
-                    &mut min_x,
-                    &mut min_y,
-                    &mut max_x,
-                    &mut max_y,
-                    Point::new(o.x + hw, o.y),
-                );
+                for p in geometry::rect_corners(pose.origin[i], width, height, pose.spin_deg) {
+                    include_point(&mut any, &mut min_x, &mut min_y, &mut max_x, &mut max_y, p);
+                }
             }
         }
     }
@@ -457,6 +450,20 @@ mod tests {
             height,
             (crate::stickman::geometry::STANDING_HEIGHT / 2) as u32
         );
+    }
+
+    #[test]
+    fn box_roll_spin_widens_dirty_rect() {
+        let idle = sample_at(crate::stickman::ir::ClipId::BoxIdle, 0);
+        let mut actor = Actor::default();
+        actor.play(crate::stickman::ir::ClipId::BoxRoll);
+        actor.x = 100;
+        actor.y = 200;
+        actor.time_ms = library::clip(crate::stickman::ir::ClipId::BoxRoll).duration_ms as u32 / 8;
+        let mut rolled = PoseScratch::new();
+        sample(&actor, &mut rolled);
+        assert_ne!(rolled.spin_deg, 0);
+        assert!(dirty_rect(&rolled).size.width > dirty_rect(&idle).size.width);
     }
 
     #[test]

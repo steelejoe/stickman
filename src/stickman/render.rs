@@ -1,6 +1,6 @@
 //! Floor line and pose strokes (embedded-graphics).
 
-use crate::stickman::geometry::floor_y;
+use crate::stickman::geometry::{self, floor_y};
 use crate::stickman::ir::{BoneKind, PoseScratch};
 use crate::DISPLAY_WIDTH;
 use embedded_graphics::draw_target::DrawTarget;
@@ -47,11 +47,20 @@ where
                     .draw(display)?;
             }
             BoneKind::Rect { width, height } => {
-                let origin = pose.origin[i];
-                let top_left = Point::new(origin.x - width as i32 / 2, origin.y - height as i32);
-                Rectangle::new(top_left, Size::new(width, height))
-                    .into_styled(PrimitiveStyle::with_stroke(WHITE, 1))
-                    .draw(display)?;
+                let corners = geometry::rect_corners(pose.origin[i], width, height, pose.spin_deg);
+                if pose.spin_deg == 0 {
+                    let top_left = corners[0];
+                    Rectangle::new(top_left, Size::new(width, height))
+                        .into_styled(PrimitiveStyle::with_stroke(WHITE, 1))
+                        .draw(display)?;
+                } else {
+                    let style = PrimitiveStyle::with_stroke(WHITE, 1);
+                    for k in 0..4 {
+                        Line::new(corners[k], corners[(k + 1) % 4])
+                            .into_styled(style)
+                            .draw(display)?;
+                    }
+                }
             }
         }
     }
