@@ -133,6 +133,7 @@ pub fn box_weights(id: BoxBehaviorId, event: Event) -> &'static [(BoxBehaviorId,
             &[(BoxBehaviorId::Idle, 50), (BoxBehaviorId::Shudder, 50)]
         }
         (BoxBehaviorId::Idle, Event::BehaviorFinished) => &[(BoxBehaviorId::Idle, 1)],
+        (_, Event::Falling) => &[(BoxBehaviorId::Idle, 1)],
     }
 }
 

@@ -42,11 +42,13 @@ Probably not though.
 
 Done so far:
 - Table-driven behaviors (`behaviors!` in `plugin.rs`: clip + locomotion)
-- Cycle order: walk → idle → jump → crouch → begging → knockback → tumble
+- Cycle order: walk → idle → jump → jump-forward → crouch → crawl → begging → knockback → tumble
   - **Walking** — gait + edge bounce
   - **Idle** — standing still (static frame skip)
   - **Jumping** — parabolic hop; head just above screen mid
+  - **Jump-forward** — same tuck, travel along facing; peak ≈ half standing height
   - **Crouching** — bent knees, torso lean ~30°, arms by sides
+  - **Crawling** — crouch hips, hands-and-knees, alternating contralateral gait
   - **Begging** — bent knees, arms reaching forward
   - **Knockback** — front-facing spin, travel opposite facing
   - **Tumbling** — side-profile crouch-ball roll (clockwise / CCW by facing)
@@ -55,13 +57,11 @@ Done so far:
 
 TODOs:
 - [x] Add behavior system to the infrastructure
-- [x] Walking / idle / jump / crouch / begging / knockback / tumble behaviors
+- [x] Walking / idle / jump / jump-forward / crouch / crawl / begging / knockback / tumble behaviors
 - [x] Species + clip IR (bones in flash, clips key angles; behaviors direct world logic)
 - [x] Add randomness to the behaviors
 - [x] Add extra model (box) for testing collision
 - [x] Add collision support (maybe calculated when drawing for more precision)
-- [ ] Behaviors that control scale (and richer rotation beyond roll modes)
-- [ ] Optional: attach behaviors to non-stickman images / sprites
 - [x] Behavior self-transitions / timed sequences (beyond tap-to-cycle)
 - [x] Add chained action probability functions - e.g I could push the box when colliding with it
   - Events: tap (hit-test), collision (enter + still-overlapping after finish), behavior-finished (looping clips only)
@@ -69,9 +69,11 @@ TODOs:
   - Box: idle (favored), slide, roll, shudder — real clips/loco
   - Flip facing is a stickman behavior; tables own facing
   - Empty tap → random stickman behavior
+- [ ] Behaviors that control scale (and richer rotation beyond roll modes)
+- [ ] Optional: attach behaviors to non-stickman images / sprites
 - [ ] Should I add friction? i.e. how slow does box move when pushed
-- [ ] Raised baseline - what happens when I collide with top of something e.g. a box?
-- [ ] Gravity - what happens when I step off of box?
+- [x] Raised baseline - walk/land on the top of models (e.g. the box); floor is the default
+- [x] Gravity - step off a lid → `Falling` event and pull down to the default floor
 - [ ] Rooms - what happens when I hit edges of map? can I load new background and swap positions?
 - [ ] Add support for configuration (file over usb, wifi web site, ???)
   - Add things e.g .images converted to right format

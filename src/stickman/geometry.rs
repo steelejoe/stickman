@@ -9,6 +9,8 @@ const FLOOR_MARGIN: i32 = 18;
 pub const HEAD_CENTER_ABOVE_FEET: i32 = 58;
 /// Standing pose: top-of-head distance above the feet (head diameter 12).
 pub const STANDING_HEIGHT: i32 = HEAD_CENTER_ABOVE_FEET + 6;
+/// Peak foot lift for a forward hop (~half standing height).
+pub const JUMP_FORWARD_RISE: i32 = STANDING_HEIGHT / 2;
 
 /// Y coordinate of the floor (feet contact line).
 pub fn floor_y() -> i32 {

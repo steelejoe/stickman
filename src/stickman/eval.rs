@@ -375,11 +375,12 @@ mod tests {
         }
     }
 
-    const ALL_CLIPS: [crate::stickman::ir::ClipId; 11] = [
+    const ALL_CLIPS: [crate::stickman::ir::ClipId; 12] = [
         crate::stickman::ir::ClipId::Walk,
         crate::stickman::ir::ClipId::Idle,
         crate::stickman::ir::ClipId::Jump,
         crate::stickman::ir::ClipId::Crouch,
+        crate::stickman::ir::ClipId::Crawl,
         crate::stickman::ir::ClipId::Beg,
         crate::stickman::ir::ClipId::SwordStance,
         crate::stickman::ir::ClipId::SwordStab,
@@ -426,6 +427,44 @@ mod tests {
         let shin_a = pose.tip[library::SHIN_A as usize].y;
         let shin_b = pose.tip[library::SHIN_B as usize].y;
         assert!(shin_a.max(shin_b) <= 200);
+    }
+
+    #[test]
+    fn crawl_is_lower_than_idle_and_plants() {
+        let idle = sample_at(crate::stickman::ir::ClipId::Idle, 0);
+        let crawl = sample_at(crate::stickman::ir::ClipId::Crawl, 0);
+        let crouch = sample_at(crate::stickman::ir::ClipId::Crouch, 0);
+        let lowest = contact_lowest_y(&crawl).expect("contact");
+        assert_eq!(lowest, 200);
+        // y-down: crawl head sits below idle and near the crouched silhouette.
+        assert!(crawl.tip[library::HEAD as usize].y > idle.tip[library::HEAD as usize].y);
+        assert!(crawl.tip[library::HEAD as usize].y >= crouch.tip[library::HEAD as usize].y);
+    }
+
+    #[test]
+    fn crawl_limbs_alternate_contralateral() {
+        let clip = library::clip(crate::stickman::ir::ClipId::Crawl);
+        let t0 = sample_at(crate::stickman::ir::ClipId::Crawl, 0);
+        let t_half = sample_at(
+            crate::stickman::ir::ClipId::Crawl,
+            clip.duration_ms as u32 / 2,
+        );
+        let hand_a = library::FOREARM_A as usize;
+        let hand_b = library::FOREARM_B as usize;
+        let knee_a = library::THIGH_A as usize;
+        let knee_b = library::THIGH_B as usize;
+        // t=0: arm A + knee B forward.
+        assert!(t0.tip[hand_a].x > t0.tip[hand_b].x, "arm A forward at t=0");
+        assert!(t0.tip[knee_b].x > t0.tip[knee_a].x, "knee B forward at t=0");
+        // half cycle: opposite pair.
+        assert!(
+            t_half.tip[hand_b].x > t_half.tip[hand_a].x,
+            "arm B forward at mid"
+        );
+        assert!(
+            t_half.tip[knee_a].x > t_half.tip[knee_b].x,
+            "knee A forward at mid"
+        );
     }
 
     #[test]

@@ -14,7 +14,9 @@ pub enum ClipId {
     Walk,
     Idle,
     Jump,
+    JumpForward,
     Crouch,
+    Crawl,
     Beg,
     SwordStance,
     SwordStab,
@@ -149,6 +151,8 @@ pub struct Actor {
     pub layer: LayerId,
     pub clip: ClipId,
     pub time_ms: u32,
+    /// Downward fall speed in px/s. Zero while supported.
+    pub vy: i32,
     travel_rem: i32,
 }
 
@@ -161,6 +165,7 @@ impl Default for Actor {
             layer: LayerId::Middle,
             clip: ClipId::Walk,
             time_ms: 0,
+            vy: 0,
             travel_rem: 0,
         }
     }

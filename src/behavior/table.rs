@@ -75,6 +75,27 @@ mod tests {
     }
 
     #[test]
+    fn model_collision_prefers_jump_forward() {
+        let ctx = EventCtx {
+            collision: Some(CollisionKind::Model),
+            ..EventCtx::default()
+        };
+        let rows = stickman_weights(BehaviorId::Walking, Event::Collision, ctx);
+        assert_eq!(rows[0], (&[BehaviorId::JumpForward][..], 80));
+        assert_eq!(max_chain(rows), &[BehaviorId::JumpForward][..]);
+        let jump_w: u16 = rows
+            .iter()
+            .filter(|(c, _)| *c == [BehaviorId::JumpForward])
+            .map(|(_, w)| *w)
+            .sum();
+        let total: u16 = rows.iter().map(|(_, w)| *w).sum();
+        assert_eq!(jump_w * 5, total * 4);
+        let idle = stickman_weights(BehaviorId::Idle, Event::Collision, ctx);
+        assert_eq!(idle[0].0, &[BehaviorId::JumpForward][..]);
+        assert_eq!(idle[0].1, 80);
+    }
+
+    #[test]
     fn walking_edge_collision_is_only_flip_then_walk() {
         let ctx = EventCtx {
             collision: Some(CollisionKind::EdgeRight),
@@ -86,5 +107,31 @@ mod tests {
             rows[0].0,
             &[BehaviorId::FlipFacing, BehaviorId::Walking][..]
         );
+    }
+
+    #[test]
+    fn falling_favors_walk_not_jump() {
+        let rows = stickman_weights(BehaviorId::Walking, Event::Falling, EventCtx::default());
+        assert_eq!(max_chain(rows), &[BehaviorId::Walking][..]);
+        assert!(
+            !rows
+                .iter()
+                .any(|(c, _)| c.contains(&BehaviorId::Jumping)
+                    || c.contains(&BehaviorId::JumpForward))
+        );
+    }
+
+    #[test]
+    fn stickman_tap_flip_facing_is_15_percent() {
+        let rows = stickman_weights(BehaviorId::Walking, Event::Tap, EventCtx::default());
+        let flip_w: u32 = rows
+            .iter()
+            .filter(|(c, _)| *c == [BehaviorId::FlipFacing])
+            .map(|(_, w)| *w as u32)
+            .sum();
+        let total: u32 = rows.iter().map(|(_, w)| *w as u32).sum();
+        assert_eq!(total, 100);
+        assert_eq!(flip_w, 15);
+        assert_eq!(max_chain(rows), &[BehaviorId::FlipFacing][..]);
     }
 }

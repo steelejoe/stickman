@@ -4,7 +4,7 @@ use crate::assets::{self, Rgb565Image};
 use crate::behavior::box_beh::BoxBrain;
 use crate::behavior::event::{Event, EventCtx};
 use crate::behavior::plugin::BehaviorManager;
-use crate::collision::{self, ContactMemory, World};
+use crate::collision::{self, apply_gravity, support_y, ContactMemory, World, LAND_SLOP};
 use crate::dirty::{self, DIRTY_BUF_LEN};
 use crate::stickman::eval;
 use crate::stickman::geometry::floor_y;
@@ -36,6 +36,8 @@ pub struct Game {
     /// Scratch tile for flicker-free dirty presents (composed in RAM, one blit).
     dirty_buf: [Rgb565; DIRTY_BUF_LEN],
     contacts: ContactMemory,
+    /// Last tick the stickman was on a support (floor or model top).
+    stick_grounded: bool,
 }
 
 impl Game {
@@ -59,6 +61,7 @@ impl Game {
             background: assets::embedded_background(),
             dirty_buf: [Rgb565::BLACK; DIRTY_BUF_LEN],
             contacts: ContactMemory::new(),
+            stick_grounded: true,
         }
     }
 
@@ -83,7 +86,7 @@ impl Game {
     }
 
     /// Hit-test tap: the entity under the point rolls its tap table.
-    /// Empty space picks a random stickman behavior.
+    /// Empty space: 15% flip facing, otherwise a random other stickman behavior.
     pub fn on_tap(&mut self, x: u32, y: u32) {
         eval::sample(&self.actor, &mut self.scratch);
         eval::sample(&self.box_actor, &mut self.box_scratch);
@@ -102,14 +105,60 @@ impl Game {
                 entropy,
             );
         } else {
-            self.behavior_mgr.cycle_random(&mut self.actor, entropy);
+            self.behavior_mgr.cycle_empty_tap(&mut self.actor, entropy);
         }
     }
 
     pub fn update(&mut self, delta_ms: u64) {
-        let stick_fin = self.behavior_mgr.update(delta_ms, &mut self.actor);
+        self.sample_poses();
+        let floor = floor_y();
+        let box_hit = eval::hitbox(&self.box_scratch);
+        let support0 = support_y(self.actor.x, self.actor.y, &[box_hit], floor);
+        let jumping = self.behavior_mgr.in_jump_arc();
+        let airborne = jumping || self.actor.y + LAND_SLOP < support0;
+        let prev_y = self.actor.y;
+
+        let stick_fin =
+            self.behavior_mgr
+                .update_loco(delta_ms, &mut self.actor, support0, airborne);
         let box_fin = self.box_brain.update(delta_ms, &mut self.box_actor);
-        let stick_chained = if stick_fin {
+
+        self.sample_poses();
+        let box_hit = eval::hitbox(&self.box_scratch);
+        let support = support_y(self.actor.x, self.actor.y, &[box_hit], floor);
+        let dt = delta_ms as u32;
+
+        let mut landed_jump = false;
+        let mut started_falling = false;
+        if jumping {
+            let rising = self.actor.y < prev_y;
+            let on_raised = !rising
+                && support + LAND_SLOP < floor
+                && self.actor.y + LAND_SLOP >= support
+                && support + LAND_SLOP < self.behavior_mgr.jump_takeoff_y();
+            if on_raised {
+                self.actor.y = support;
+                self.actor.vy = 0;
+                self.stick_grounded = true;
+                landed_jump = true;
+            } else {
+                self.actor.vy = 0;
+                self.stick_grounded = false;
+            }
+        } else if self.actor.y + LAND_SLOP < support {
+            started_falling = self.stick_grounded;
+            self.actor.y = apply_gravity(self.actor.y, &mut self.actor.vy, support, dt);
+            self.stick_grounded = self.actor.y >= support;
+        } else {
+            self.actor.y = support;
+            self.actor.vy = 0;
+            self.stick_grounded = true;
+        }
+
+        let jump_ended_air =
+            jumping && stick_fin && !landed_jump && self.actor.y + LAND_SLOP < support;
+
+        let stick_chained = if stick_fin || landed_jump {
             self.behavior_mgr.on_event(
                 &mut self.actor,
                 Event::BehaviorFinished,
@@ -137,7 +186,7 @@ impl Game {
             World {
                 width: DISPLAY_WIDTH as i32,
                 height: DISPLAY_HEIGHT as i32,
-                baseline_y: floor_y(),
+                baseline_y: floor,
             },
         );
 
@@ -162,6 +211,14 @@ impl Game {
             other_x: Some(self.box_actor.x),
             other_facing_left: Some(self.box_actor.facing_left),
         };
+        if started_falling || jump_ended_air {
+            self.behavior_mgr.on_event(
+                &mut self.actor,
+                Event::Falling,
+                EventCtx::default(),
+                entropy ^ 0xF,
+            );
+        }
         if hits.body_entered(0) {
             self.behavior_mgr
                 .on_event(&mut self.actor, Event::Collision, ctx_stick, entropy ^ 0xA);
@@ -329,6 +386,7 @@ impl Default for Game {
 mod tests {
     use super::*;
     use crate::behavior::box_beh::BoxBehaviorId;
+    use crate::stickman::geometry::floor_y;
     use crate::stickman::library;
 
     #[test]
@@ -392,5 +450,55 @@ mod tests {
         actor.play(ClipId::Idle);
         assert!(!actor.advance(1000));
         assert_eq!(actor.time_ms, 0);
+    }
+
+    #[test]
+    fn jump_forward_lands_on_box_top() {
+        let mut game = Game::new();
+        let floor = floor_y();
+        let top = floor - library::BOX_HEIGHT as i32;
+        game.actor.x = game.box_actor.x - 24;
+        game.actor.facing_left = false;
+        game.on_cycle_input();
+        game.on_cycle_input();
+        game.on_cycle_input();
+        assert_eq!(game.actor.clip, ClipId::JumpForward);
+        for _ in 0..48 {
+            game.update(33);
+            if game.actor.y == top
+                && game.actor.x >= game.box_actor.x - 20
+                && game.actor.x < game.box_actor.x + 20
+            {
+                break;
+            }
+        }
+        assert_eq!(game.actor.y, top);
+        assert!(
+            (game.actor.x - game.box_actor.x).abs() < library::BOX_WIDTH as i32,
+            "x={} box={}",
+            game.actor.x,
+            game.box_actor.x
+        );
+    }
+
+    #[test]
+    fn walking_off_box_falls_to_floor() {
+        let mut game = Game::new();
+        let floor = floor_y();
+        let top = floor - library::BOX_HEIGHT as i32;
+        game.actor.x = game.box_actor.x;
+        game.actor.y = top;
+        game.stick_grounded = true;
+        game.actor.facing_left = false;
+        let start_y = game.actor.y;
+        for _ in 0..48 {
+            game.update(33);
+            if game.actor.y >= floor {
+                break;
+            }
+        }
+        assert!(game.actor.y > start_y);
+        assert_eq!(game.actor.y, floor);
+        assert_eq!(game.box_actor.y, floor);
     }
 }

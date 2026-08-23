@@ -11,6 +11,8 @@ pub enum Event {
     Collision,
     /// A looping clip completed one cycle. Held / `Once` poses never emit this.
     BehaviorFinished,
+    /// Left a raised baseline; gravity is pulling toward the default floor.
+    Falling,
 }
 
 /// Extra data for a table roll (mostly collision).

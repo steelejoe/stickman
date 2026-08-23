@@ -27,6 +27,13 @@ pub struct World {
     pub baseline_y: i32,
 }
 
+/// How close feet may sit above a surface and still count as supported.
+pub const LAND_SLOP: i32 = 2;
+/// Downward acceleration while falling (px/s²).
+const GRAVITY_PX_S2: i32 = 900;
+/// Cap on fall speed (px/s).
+const TERMINAL_PX_S: i32 = 360;
+
 const MAX_BODIES: usize = 4;
 const F_LEFT: u8 = 1 << 0;
 const F_RIGHT: u8 = 1 << 1;
@@ -96,7 +103,11 @@ pub fn resolve(
             let overlap = same_layer && rects_overlap(bodies[i].1, bodies[j].1);
             let bit = pair_bit(i, j);
             let was = mem.pairs & bit != 0;
-            if overlap && !was {
+            // Off the default floor (jumping or on a raised top): pass through
+            // model sides so a hop can land on the lid instead of bumping it.
+            let off_floor = bodies[i].0.y + LAND_SLOP < world.baseline_y
+                || bodies[j].0.y + LAND_SLOP < world.baseline_y;
+            if overlap && !was && !off_floor {
                 hits.mark(i, CollisionKind::Model);
                 hits.mark(j, CollisionKind::Model);
             }
@@ -179,6 +190,40 @@ pub fn resolve(
 
 pub fn contains_point(r: Rectangle, p: Point) -> bool {
     p.x >= r.top_left.x && p.y >= r.top_left.y && p.x < max_x(r) && p.y < max_y(r)
+}
+
+/// Highest surface under `feet` (smallest y). The default floor is used when
+/// no model top spans `feet_x` at or below the feet.
+pub fn support_y(feet_x: i32, feet_y: i32, platforms: &[Rectangle], floor_y: i32) -> i32 {
+    let mut best = floor_y;
+    for p in platforms {
+        if feet_x < p.top_left.x || feet_x >= max_x(*p) {
+            continue;
+        }
+        let top = p.top_left.y;
+        if top >= feet_y - LAND_SLOP && top < best {
+            best = top;
+        }
+    }
+    best
+}
+
+/// Accelerate `y` toward `support_y` (screen +Y down). `vy` is px/s.
+pub fn apply_gravity(y: i32, vy: &mut i32, support_y: i32, dt_ms: u32) -> i32 {
+    if y >= support_y {
+        *vy = 0;
+        return support_y;
+    }
+    let dt = dt_ms as i32;
+    *vy = (*vy + GRAVITY_PX_S2 * dt / 1000).min(TERMINAL_PX_S);
+    let dy = (*vy * dt / 1000).max(1);
+    let next = y + dy;
+    if next >= support_y {
+        *vy = 0;
+        support_y
+    } else {
+        next
+    }
 }
 
 fn enter_edge(
@@ -347,5 +392,50 @@ mod tests {
         assert!(contains_point(r, Point::new(14, 24)));
         assert!(!contains_point(r, Point::new(15, 20)));
         assert!(!contains_point(r, Point::new(10, 25)));
+    }
+
+    #[test]
+    fn support_y_defaults_to_floor() {
+        assert_eq!(support_y(50, 80, &[], 80), 80);
+        let platform = rect(40, 50, 20, 30);
+        assert_eq!(support_y(10, 80, &[platform], 80), 80);
+    }
+
+    #[test]
+    fn support_y_uses_model_top_when_feet_span_it() {
+        let platform = rect(40, 50, 20, 30);
+        assert_eq!(support_y(50, 50, &[platform], 80), 50);
+        assert_eq!(support_y(50, 48, &[platform], 80), 50);
+        // Already below the lid: fall through to the default floor.
+        assert_eq!(support_y(50, 70, &[platform], 80), 80);
+    }
+
+    #[test]
+    fn gravity_pulls_down_to_support_and_stops() {
+        let mut vy = 0;
+        let mut y = 40;
+        for _ in 0..40 {
+            y = apply_gravity(y, &mut vy, 80, 33);
+        }
+        assert_eq!(y, 80);
+        assert_eq!(vy, 0);
+    }
+
+    #[test]
+    fn airborne_overlap_does_not_mark_model() {
+        let mut a = actor(40, false);
+        a.y = 50;
+        let mut b = actor(60, true);
+        let mut mem = ContactMemory::new();
+        let hits = resolve(
+            &mut [
+                (&mut a, rect(30, 40, 20, 30)),
+                (&mut b, rect(40, 55, 20, 20)),
+            ],
+            &mut mem,
+            world(),
+        );
+        assert!(!hits.model_enter);
+        assert!(mem.models_overlap(0, 1));
     }
 }

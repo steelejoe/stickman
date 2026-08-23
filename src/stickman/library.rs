@@ -14,6 +14,8 @@ pub const BOX_WIDTH: u32 = BOX_HEIGHT;
 pub const WALK_MS: u16 = 1111;
 /// Pixels of logical X per walk/tumble loop (knockback uses the negation).
 const TRAVEL_DX: i16 = 60;
+/// Shorter stride than walk; same loop length so crawl keys share the gait clock.
+const CRAWL_DX: i16 = 36;
 const STAB_MS: u16 = 900;
 const JUMP_MS: u16 = 750;
 
@@ -190,6 +192,10 @@ const HIP_CROUCH: Track = track!(HIP, Len, (0, 12, Hold));
 const SPINE_150: Track = track!(SPINE, Rot, (0, 150, Hold));
 const NECK_150: Track = track!(NECK, Rot, (0, 150, Hold));
 const HEAD_150: Track = track!(HEAD, Rot, (0, 150, Hold));
+/// All-fours lean (more horizontal than crouch's 150°).
+const SPINE_102: Track = track!(SPINE, Rot, (0, 102, Hold));
+const NECK_124: Track = track!(NECK, Rot, (0, 124, Hold));
+const HEAD_148: Track = track!(HEAD, Rot, (0, 148, Hold));
 const SPINE_180: Track = track!(SPINE, Rot, (0, 180, Hold));
 const NECK_180: Track = track!(NECK, Rot, (0, 180, Hold));
 const HEAD_180: Track = track!(HEAD, Rot, (0, 180, Hold));
@@ -290,22 +296,33 @@ static WALK: Clip = Clip {
     ],
 };
 
+const JUMP_TRACKS: &[Track] = &[
+    track!(THIGH_A, Rot, (0, 18, Hold)),
+    track!(SHIN_A, Rot, (0, -22, Hold)),
+    track!(THIGH_B, Rot, (0, -14, Hold)),
+    track!(SHIN_B, Rot, (0, -50, Hold)),
+    track!(ARM_A, Rot, (0, -150, Hold)),
+    track!(FOREARM_A, Rot, (0, -125, Hold)),
+    track!(ARM_B, Rot, (0, -135, Hold)),
+    track!(FOREARM_B, Rot, (0, -105, Hold)),
+];
+
 static JUMP: Clip = Clip {
     species: &STICKMAN,
     duration_ms: JUMP_MS,
     loop_mode: LoopMode::Loop,
     travel_dx: 0,
     spin: Spin::None,
-    tracks: &[
-        track!(THIGH_A, Rot, (0, 18, Hold)),
-        track!(SHIN_A, Rot, (0, -22, Hold)),
-        track!(THIGH_B, Rot, (0, -14, Hold)),
-        track!(SHIN_B, Rot, (0, -50, Hold)),
-        track!(ARM_A, Rot, (0, -150, Hold)),
-        track!(FOREARM_A, Rot, (0, -125, Hold)),
-        track!(ARM_B, Rot, (0, -135, Hold)),
-        track!(FOREARM_B, Rot, (0, -105, Hold)),
-    ],
+    tracks: JUMP_TRACKS,
+};
+
+static JUMP_FORWARD: Clip = Clip {
+    species: &STICKMAN,
+    duration_ms: JUMP_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: TRAVEL_DX,
+    spin: Spin::None,
+    tracks: JUMP_TRACKS,
 };
 
 static CROUCH: Clip = Clip {
@@ -327,6 +344,85 @@ static CROUCH: Clip = Clip {
         track!(FOREARM_A, Rot, (0, 28, Hold)),
         track!(ARM_B, Rot, (0, -8, Hold)),
         track!(FOREARM_B, Rot, (0, 14, Hold)),
+    ],
+};
+
+/// Hands-and-knees from the crouch: low hip, torso flatter, contralateral gait.
+static CRAWL: Clip = Clip {
+    species: &STICKMAN,
+    duration_ms: WALK_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: CRAWL_DX,
+    spin: Spin::None,
+    tracks: &[
+        HIP_CROUCH,
+        SPINE_102,
+        NECK_124,
+        HEAD_148,
+        track!(
+            THIGH_A,
+            Rot,
+            (0, 10, Lerp),
+            (278, 28, Lerp),
+            (556, 44, Lerp),
+            (833, 28, Lerp)
+        ),
+        track!(
+            SHIN_A,
+            Rot,
+            (0, -116, Lerp),
+            (278, -108, Lerp),
+            (556, -98, Lerp),
+            (833, -108, Lerp)
+        ),
+        track!(
+            THIGH_B,
+            Rot,
+            (0, 44, Lerp),
+            (278, 28, Lerp),
+            (556, 10, Lerp),
+            (833, 28, Lerp)
+        ),
+        track!(
+            SHIN_B,
+            Rot,
+            (0, -98, Lerp),
+            (278, -108, Lerp),
+            (556, -116, Lerp),
+            (833, -108, Lerp)
+        ),
+        track!(
+            ARM_A,
+            Rot,
+            (0, 62, Lerp),
+            (278, 48, Lerp),
+            (556, 34, Lerp),
+            (833, 48, Lerp)
+        ),
+        track!(
+            FOREARM_A,
+            Rot,
+            (0, 10, Lerp),
+            (278, 8, Lerp),
+            (556, 8, Lerp),
+            (833, 8, Lerp)
+        ),
+        track!(
+            ARM_B,
+            Rot,
+            (0, 34, Lerp),
+            (278, 48, Lerp),
+            (556, 62, Lerp),
+            (833, 48, Lerp)
+        ),
+        track!(
+            FOREARM_B,
+            Rot,
+            (0, 8, Lerp),
+            (278, 8, Lerp),
+            (556, 10, Lerp),
+            (833, 8, Lerp)
+        ),
     ],
 };
 
@@ -664,7 +760,9 @@ pub fn clip(id: ClipId) -> &'static Clip {
         ClipId::Walk => &WALK,
         ClipId::Idle => &IDLE,
         ClipId::Jump => &JUMP,
+        ClipId::JumpForward => &JUMP_FORWARD,
         ClipId::Crouch => &CROUCH,
+        ClipId::Crawl => &CRAWL,
         ClipId::Beg => &BEG,
         ClipId::SwordStance => &SWORD_STANCE,
         ClipId::SwordStab => &SWORD_STAB,
@@ -688,7 +786,13 @@ mod tests {
     fn walk_travel_is_shared() {
         assert_eq!(WALK.travel_dx, TRAVEL_DX);
         assert_eq!(TUMBLE.travel_dx, TRAVEL_DX);
+        assert_eq!(JUMP_FORWARD.travel_dx, TRAVEL_DX);
         assert_eq!(KNOCKBACK.travel_dx, -TRAVEL_DX);
+        assert_eq!(JUMP.travel_dx, 0);
+        assert_eq!(CRAWL.travel_dx, CRAWL_DX);
+        assert!(CRAWL.travel_dx < TRAVEL_DX);
+        assert_eq!(CRAWL.loop_mode, LoopMode::Loop);
+        assert_eq!(CRAWL.duration_ms, WALK_MS);
     }
 
     #[test]
