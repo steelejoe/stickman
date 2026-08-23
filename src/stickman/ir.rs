@@ -2,10 +2,10 @@
 //!
 //! Trees stay in `.rodata`. RAM is [`Actor`] (tiny) plus one reused
 //! [`PoseScratch`] in [`crate::game::Game`]. Clips interpolate joint angles;
-//! world logic (bounce, facing, jump height) stays in Rust behaviors.
+//! travel vectors, facing, and jump impulses stay in Rust behaviors.
 
 use crate::layer::LayerId;
-use crate::stickman::geometry::floor_y;
+use crate::stickman::geometry::floor_y_at;
 use crate::DISPLAY_WIDTH;
 
 /// Which clip an [`Actor`] is playing. Data lives in [`crate::stickman::library`].
@@ -89,7 +89,7 @@ pub enum Prop {
     Len,
     /// Root visual offset X (facing-space, before mirror).
     Tx,
-    /// Root visual offset Y (screen +Y down). Jump height can live here or on `Actor.y`.
+    /// Root visual offset Y (screen +Y down). Aerial lift lives on `Actor.vy`.
     Ty,
     /// 0 = hidden, 1 = drawn. Sampled as hold.
     Visible,
@@ -151,22 +151,26 @@ pub struct Actor {
     pub layer: LayerId,
     pub clip: ClipId,
     pub time_ms: u32,
-    /// Downward fall speed in px/s. Zero while supported.
+    /// Travel vector in px/s. +X right, +Y down (gravity, jumps, walks).
+    pub vx: i32,
     pub vy: i32,
-    travel_rem: i32,
+    x_rem: i32,
+    y_rem: i32,
 }
 
 impl Default for Actor {
     fn default() -> Self {
         Self {
             x: (DISPLAY_WIDTH / 2) as i32,
-            y: floor_y(),
+            y: floor_y_at((DISPLAY_WIDTH / 2) as i32),
             facing_left: false,
             layer: LayerId::Middle,
             clip: ClipId::Walk,
             time_ms: 0,
+            vx: 0,
             vy: 0,
-            travel_rem: 0,
+            x_rem: 0,
+            y_rem: 0,
         }
     }
 }
@@ -175,7 +179,58 @@ impl Actor {
     pub fn play(&mut self, clip: ClipId) {
         self.clip = clip;
         self.time_ms = 0;
-        self.travel_rem = 0;
+        self.x_rem = 0;
+        self.y_rem = 0;
+    }
+
+    /// Horizontal clip speed along facing (px/s).
+    pub fn clip_vx(&self) -> i32 {
+        let clip = crate::stickman::library::clip(self.clip);
+        if clip.travel_dx == 0 || clip.duration_ms == 0 {
+            return 0;
+        }
+        let speed = clip.travel_dx as i32 * 1000 / clip.duration_ms as i32;
+        if self.facing_left {
+            -speed
+        } else {
+            speed
+        }
+    }
+
+    /// Face along the travel vector. No-op when `vx` is zero (idle / held poses).
+    pub fn sync_facing(&mut self) {
+        if self.vx > 0 {
+            self.facing_left = false;
+        } else if self.vx < 0 {
+            self.facing_left = true;
+        }
+    }
+
+    /// Set [`Self::vx`] from the current clip and facing, then align facing to it.
+    pub fn apply_clip_velocity(&mut self) {
+        self.vx = self.clip_vx();
+        self.sync_facing();
+    }
+
+    /// Advance position by the travel vector. Remainders keep sub-pixel speed.
+    pub fn integrate(&mut self, dt_ms: u32) {
+        let dt = dt_ms as i32;
+        let xnum = self.vx * dt + self.x_rem;
+        self.x += xnum / 1000;
+        self.x_rem = xnum % 1000;
+        let ynum = self.vy * dt + self.y_rem;
+        self.y += ynum / 1000;
+        self.y_rem = ynum % 1000;
+    }
+
+    /// Drop sub-pixel remainder on an axis after a bounce or land.
+    pub fn clear_remainder(&mut self, axis_x: bool, axis_y: bool) {
+        if axis_x {
+            self.x_rem = 0;
+        }
+        if axis_y {
+            self.y_rem = 0;
+        }
     }
 
     /// Advance clip time. Returns true when a looping clip wrapped a cycle.
@@ -198,23 +253,6 @@ impl Actor {
         let finished = next >= d;
         self.time_ms = next % d;
         finished
-    }
-
-    /// Pixels to add to `x` this tick from [`Clip::travel_dx`].
-    pub fn take_travel(&mut self, dt_ms: u32) -> i32 {
-        let clip = crate::stickman::library::clip(self.clip);
-        if clip.travel_dx == 0 || clip.duration_ms == 0 {
-            return 0;
-        }
-        let num = clip.travel_dx as i32 * dt_ms as i32 + self.travel_rem;
-        let den = clip.duration_ms as i32;
-        let steps = num / den;
-        self.travel_rem = num % den;
-        if self.facing_left {
-            -steps
-        } else {
-            steps
-        }
     }
 }
 

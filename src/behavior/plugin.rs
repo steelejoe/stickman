@@ -1,15 +1,15 @@
 //! Behavior table: cycle order, clip, and locomotion.
 //!
 //! Drawing is not per-behavior. Each row names a [`ClipId`]; [`crate::game::Game`]
-//! evaluates that clip. This module only runs world logic (travel, jump height,
-//! facing). Support, gravity, and screen-edge contacts are resolved by
-//! [`crate::collision`].
+//! evaluates that clip. This module sets the travel vector (walk / jump impulse).
+//! Facing follows that vector. Gravity, integration, and edge reflection live
+//! in [`crate::collision`]; entered hits still roll this table.
 //!
 //! Add a behavior with one row in [`behaviors!`]. Unique update code is a
 //! [`Loco`] variant, not a new file.
 
 use crate::behavior::event::{Event, EventCtx, Rng32};
-use crate::collision::CollisionKind;
+use crate::collision::{self, CollisionKind};
 use crate::stickman::geometry::{self, floor_y, JUMP_FORWARD_RISE};
 use crate::stickman::ir::{Actor, ClipId, LoopMode};
 use crate::stickman::library;
@@ -26,15 +26,15 @@ const EMPTY_FLIP_PCT: u32 = 15;
 /// World-logic mode. Most clips are [`Loco::InPlace`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Loco {
-    /// Advance the clip (no-op if static) and pin feet to the support baseline.
+    /// Advance the clip (no-op if static). Horizontal velocity is zero.
     InPlace,
-    /// [`InPlace`] plus `travel_dx` along facing, bounce at the screen edges.
+    /// [`InPlace`] plus clip travel along facing (walls reflect the vector).
     WalkBounce,
     /// Travel with knockback wall facing (face away from the edge).
     Knockback,
-    /// Parabolic hop; clip is the in-air tuck.
+    /// Upward impulse; clip is the in-air tuck.
     Jump,
-    /// Forward hop: same tuck, travel along facing, lower peak.
+    /// Forward hop: same tuck plus clip travel along facing.
     JumpForward,
     /// Crouch clip; glance left↔right on a timer.
     Search,
@@ -101,8 +101,6 @@ pub struct BehaviorManager {
     switch_remain_ms: u32,
     /// Remainder of a multi-step table outcome (`steps[next..]`).
     chain: Option<(&'static [BehaviorId], usize)>,
-    /// Feet y when the current jump started (parabola origin).
-    jump_origin_y: i32,
 }
 
 impl BehaviorManager {
@@ -114,7 +112,6 @@ impl BehaviorManager {
             timer_ms: 0,
             switch_remain_ms: AUTO_SWITCH_MAX_MS,
             chain: None,
-            jump_origin_y: floor_y(),
         };
         this.roll_auto_switch();
         this
@@ -124,13 +121,9 @@ impl BehaviorManager {
         self.current
     }
 
-    /// True while a jump loco owns vertical motion.
+    /// True while a jump loco is playing (impulse already applied).
     pub fn in_jump_arc(&self) -> bool {
         matches!(self.current.loco(), Loco::Jump | Loco::JumpForward)
-    }
-
-    pub fn jump_takeoff_y(&self) -> i32 {
-        self.jump_origin_y
     }
 
     fn switch(&mut self, actor: &mut Actor, id: BehaviorId, index: usize) {
@@ -138,12 +131,16 @@ impl BehaviorManager {
         self.current = id;
         self.timer_ms = 0;
         if id == BehaviorId::FlipFacing {
-            actor.facing_left = !actor.facing_left;
-        }
-        if matches!(id.loco(), Loco::Jump | Loco::JumpForward) {
-            self.jump_origin_y = actor.y;
+            // Turn around: reverse any travel vector, then face along it.
+            actor.vx = -actor.vx;
+            if actor.vx == 0 {
+                actor.facing_left = !actor.facing_left;
+            } else {
+                actor.sync_facing();
+            }
         }
         actor.play(id.clip());
+        apply_loco_vector(id.loco(), actor);
         self.roll_auto_switch();
     }
 
@@ -262,7 +259,8 @@ impl BehaviorManager {
     fn begin_chain(&mut self, actor: &mut Actor, steps: &'static [BehaviorId]) {
         debug_assert!(!steps.is_empty());
         let first = steps[0];
-        if first != self.current || steps.len() > 1 {
+        let retrigger = matches!(first.loco(), Loco::Jump | Loco::JumpForward);
+        if first != self.current || steps.len() > 1 || retrigger {
             self.switch(actor, first, Self::index_of(first));
         }
         self.chain = if steps.len() > 1 {
@@ -274,18 +272,6 @@ impl BehaviorManager {
 
     /// Advance loco. Returns true when a looping clip finished a cycle.
     pub fn update(&mut self, delta_ms: u64, actor: &mut Actor) -> bool {
-        self.update_loco(delta_ms, actor, floor_y(), false)
-    }
-
-    /// Advance loco on a support. While `airborne`, grounded locos do not pin Y
-    /// (gravity in [`crate::collision`] owns the fall).
-    pub fn update_loco(
-        &mut self,
-        delta_ms: u64,
-        actor: &mut Actor,
-        baseline_y: i32,
-        airborne: bool,
-    ) -> bool {
         self.rng.mix(delta_ms as u32);
         let dt = delta_ms as u32;
         if !self.current.emits_cycle_finished() {
@@ -294,78 +280,57 @@ impl BehaviorManager {
                 self.cycle_random(actor, dt);
             }
         }
-        apply_loco(
-            self.current.loco(),
-            actor,
-            dt,
-            crate::DISPLAY_HEIGHT,
-            &mut self.timer_ms,
-            baseline_y,
-            airborne,
-            self.jump_origin_y,
-        )
+        apply_loco(self.current.loco(), actor, dt, &mut self.timer_ms)
     }
 }
 
-fn apply_loco(
-    loco: Loco,
-    actor: &mut Actor,
-    dt_ms: u32,
-    display_height: u32,
-    timer_ms: &mut u32,
-    baseline_y: i32,
-    airborne: bool,
-    jump_origin_y: i32,
-) -> bool {
+fn apply_loco_vector(loco: Loco, actor: &mut Actor) {
+    match loco {
+        Loco::WalkBounce | Loco::Knockback | Loco::JumpForward => {
+            actor.apply_clip_velocity();
+        }
+        Loco::Jump | Loco::InPlace | Loco::Search => {
+            actor.vx = 0;
+        }
+    }
+    if matches!(loco, Loco::Jump | Loco::JumpForward) {
+        let rise = match loco {
+            Loco::JumpForward => JUMP_FORWARD_RISE,
+            _ => {
+                let apex = geometry::jump_apex_foot_y(crate::DISPLAY_HEIGHT as i32);
+                (floor_y() - apex).max(1)
+            }
+        };
+        actor.vy = -collision::jump_speed(rise);
+    }
+}
+
+fn apply_loco(loco: Loco, actor: &mut Actor, dt_ms: u32, timer_ms: &mut u32) -> bool {
     match loco {
         Loco::InPlace => {
-            let finished = actor.advance(dt_ms);
-            if !airborne {
-                actor.y = baseline_y;
-            }
-            finished
+            actor.vx = 0;
+            actor.advance(dt_ms)
         }
         Loco::WalkBounce | Loco::Knockback => {
-            let finished = actor.advance(dt_ms);
-            actor.x += actor.take_travel(dt_ms);
-            if !airborne {
-                actor.y = baseline_y;
-            }
-            finished
+            actor.apply_clip_velocity();
+            actor.advance(dt_ms)
         }
-        Loco::Jump | Loco::JumpForward => {
-            let finished = actor.advance(dt_ms);
-            let rise = match loco {
-                Loco::JumpForward => JUMP_FORWARD_RISE,
-                _ => {
-                    let apex = geometry::jump_apex_foot_y(display_height as i32);
-                    (floor_y() - apex).max(1)
-                }
-            };
-            apply_jump_arc(actor, jump_origin_y, rise);
-            if loco == Loco::JumpForward {
-                actor.x += actor.take_travel(dt_ms);
-            }
-            finished
+        Loco::Jump => {
+            actor.vx = 0;
+            actor.advance(dt_ms)
+        }
+        Loco::JumpForward => {
+            actor.apply_clip_velocity();
+            actor.advance(dt_ms)
         }
         Loco::Search => {
             *timer_ms = timer_ms.saturating_add(dt_ms) % (FACE_PAUSE_MS * FACE_STEPS);
             let step = *timer_ms / FACE_PAUSE_MS;
             actor.facing_left = step % 2 == 0;
-            if !airborne {
-                actor.y = baseline_y;
-            }
+            actor.vx = 0;
             false
         }
     }
-}
-
-/// Integer parabola `4 t (1-t)` over the clip period; peak height is `rise`.
-fn apply_jump_arc(actor: &mut Actor, origin_y: i32, rise: i32) {
-    let period = library::clip(actor.clip).duration_ms.max(1) as u32;
-    let t = actor.time_ms * 1000 / period;
-    let height = rise.max(1) * 4 * t as i32 * (1000 - t as i32) / (1000 * 1000);
-    actor.y = origin_y - height;
 }
 
 /// One table row: a short behavior sequence and its weight.
@@ -375,7 +340,7 @@ pub fn stickman_weights(id: BehaviorId, event: Event, ctx: EventCtx) -> &'static
     if event == Event::Collision
         && matches!(
             ctx.collision,
-            Some(CollisionKind::EdgeLeft | CollisionKind::EdgeRight)
+            Some(k) if k.is_vertical()
         )
     {
         return STICKMAN_EDGE;
@@ -392,7 +357,7 @@ pub fn stickman_weights(id: BehaviorId, event: Event, ctx: EventCtx) -> &'static
             (CROUCH, 5),
             (CRAWL, 5),
         ],
-        (BehaviorId::Walking, Event::Collision) => &[(FLIP_THEN_WALK, 50), (KNOCKBACK, 50)],
+        (BehaviorId::Walking, Event::Collision) => &[(WALK, 40), (IDLE, 30), (KNOCKBACK, 30)],
         (BehaviorId::Jumping, Event::BehaviorFinished) => {
             &[(WALK, 35), (JUMP, 20), (JUMP_FWD, 20), (IDLE, 25)]
         }
@@ -409,7 +374,7 @@ pub fn stickman_weights(id: BehaviorId, event: Event, ctx: EventCtx) -> &'static
         }
         (BehaviorId::Tumbling, Event::BehaviorFinished) => &[(WALK, 20), (IDLE, 10), (TUMBLE, 70)],
         (BehaviorId::FlipFacing, Event::BehaviorFinished) => &[(WALK, 70), (IDLE, 20), (FLIP, 10)],
-        (BehaviorId::FlipFacing, Event::Collision) => &[(FLIP_THEN_WALK, 50), (KNOCKBACK, 50)],
+        (BehaviorId::FlipFacing, Event::Collision) => STICKMAN_EDGE,
         (_, Event::Falling) => STICKMAN_FALL,
         (_, Event::Collision) => STICKMAN_COLLIDE,
         (_, Event::Tap) => STICKMAN_TAP,
@@ -432,16 +397,19 @@ const SWORD_CROUCH_STANCE: &[BehaviorId] = &[BehaviorId::SwordCrouchStance];
 const SWORD_CROUCH_STAB: &[BehaviorId] = &[BehaviorId::SwordCrouchStab];
 const SEARCH: &[BehaviorId] = &[BehaviorId::Searching];
 const BEG: &[BehaviorId] = &[BehaviorId::Begging];
+/// Tap / authored chain: reverse facing, then walk. Edge collisions use [`WALK`]
+/// instead — the bounce already turned the vector (and facing).
+#[allow(dead_code)]
 const FLIP_THEN_WALK: &[BehaviorId] = &[BehaviorId::FlipFacing, BehaviorId::Walking];
 
-const STICKMAN_COLLIDE: &[WeightedChain] = &[(FLIP_THEN_WALK, 70), (KNOCKBACK, 30)];
+const STICKMAN_COLLIDE: &[WeightedChain] = &[(WALK, 40), (IDLE, 30), (KNOCKBACK, 30)];
 
-/// Box / model: hop onto the lid; leftover weight is the old bump mix.
-const STICKMAN_MODEL: &[WeightedChain] = &[(JUMP_FWD, 80), (FLIP_THEN_WALK, 14), (KNOCKBACK, 6)];
+/// Box / model: hop onto the lid; leftover weight is bounce-and-walk / knockback.
+const STICKMAN_MODEL: &[WeightedChain] = &[(JUMP_FWD, 80), (WALK, 14), (KNOCKBACK, 6)];
 
-/// Screen edges: turn and walk back. Flip+knockback travels the old heading
-/// (opposite the new facing) and would leave the display.
-const STICKMAN_EDGE: &[WeightedChain] = &[(FLIP_THEN_WALK, 100)];
+/// Screen edges: the vector already bounced and facing follows it. Tables pick
+/// whether to keep walking, stop, or knockback along that heading.
+const STICKMAN_EDGE: &[WeightedChain] = &[(WALK, 40), (IDLE, 30), (KNOCKBACK, 30)];
 
 const STICKMAN_TAP: &[WeightedChain] = &[
     (FLIP, 15),
@@ -564,8 +532,37 @@ mod tests {
         assert_eq!(mgr.current, BehaviorId::Knockback);
         assert_eq!(actor.clip, ClipId::Knockback);
         assert_eq!(actor.facing_left, facing);
+        assert_eq!(actor.vx, actor.clip_vx());
+        assert!(actor.vx > 0);
         let chained = mgr.on_event(&mut actor, Event::BehaviorFinished, EventCtx::default(), 1);
         assert!(!chained);
+    }
+
+    #[test]
+    fn idle_zeros_the_travel_vector() {
+        let mut mgr = BehaviorManager::new();
+        let mut actor = Actor::default();
+        actor.apply_clip_velocity();
+        assert!(actor.vx != 0);
+        mgr.begin_chain(&mut actor, IDLE);
+        assert_eq!(mgr.current, BehaviorId::Idle);
+        assert_eq!(actor.vx, 0);
+    }
+
+    #[test]
+    fn walk_faces_along_the_travel_vector() {
+        let mut mgr = BehaviorManager::new();
+        let mut actor = Actor::default();
+        mgr.begin_chain(&mut actor, IDLE);
+        actor.facing_left = true;
+        mgr.begin_chain(&mut actor, WALK);
+        assert!(actor.vx < 0);
+        assert!(actor.facing_left);
+        mgr.begin_chain(&mut actor, IDLE);
+        actor.facing_left = false;
+        mgr.begin_chain(&mut actor, WALK);
+        assert!(actor.vx > 0);
+        assert!(!actor.facing_left);
     }
 
     fn assert_auto_switch_in_range(ms: u32) {
@@ -635,29 +632,22 @@ mod tests {
     }
 
     #[test]
-    fn jump_forward_parabola_peaks_at_half_height_and_travels() {
+    fn jump_forward_sets_upward_and_forward_vector() {
         let mut mgr = BehaviorManager::new();
         let mut actor = Actor::default();
         actor.facing_left = false;
-        let start_x = actor.x;
         mgr.switch(
             &mut actor,
             BehaviorId::JumpForward,
             BehaviorManager::index_of(BehaviorId::JumpForward),
         );
-        let floor = floor_y();
-        let period = library::clip(ClipId::JumpForward).duration_ms as u32;
-        let half = period / 2;
-        mgr.update(half as u64, &mut actor);
-        assert_eq!(actor.y, floor - JUMP_FORWARD_RISE);
-        assert!(actor.x > start_x);
+        assert_eq!(actor.vy, -collision::jump_speed(JUMP_FORWARD_RISE));
+        assert_eq!(actor.vx, actor.clip_vx());
+        assert!(actor.vx > 0);
 
-        mgr.update((period - half) as u64, &mut actor);
-        assert_eq!(actor.y, floor);
-        assert_eq!(
-            actor.x - start_x,
-            library::clip(ClipId::JumpForward).travel_dx as i32
-        );
+        actor.facing_left = true;
+        actor.apply_clip_velocity();
+        assert!(actor.vx < 0);
     }
 
     #[test]
@@ -672,12 +662,9 @@ mod tests {
             BehaviorManager::index_of(BehaviorId::JumpForward),
         );
         let period = library::clip(ClipId::JumpForward).duration_ms as u32;
-        mgr.update(period as u64, &mut actor);
-        assert_eq!(
-            start_x - actor.x,
-            library::clip(ClipId::JumpForward).travel_dx as i32
-        );
-        assert_eq!(actor.y, floor_y());
+        actor.integrate(period);
+        assert_eq!(start_x - actor.x, actor.vx.abs() * period as i32 / 1000);
+        assert!(actor.vx < 0);
     }
 
     #[test]
@@ -692,8 +679,10 @@ mod tests {
         );
         let period = library::clip(ClipId::Jump).duration_ms as u32;
         mgr.update(period as u64, &mut actor);
+        actor.integrate(period);
         assert_eq!(actor.x, start_x);
-        assert_eq!(actor.y, floor_y());
+        assert_eq!(actor.vx, 0);
+        assert!(actor.vy < 0);
     }
 
     #[test]
@@ -711,38 +700,35 @@ mod tests {
         let mut actor = Actor::default();
         actor.facing_left = false;
         let start_x = actor.x;
+        let start_y = actor.y;
         mgr.switch(
             &mut actor,
             BehaviorId::Crawling,
             BehaviorManager::index_of(BehaviorId::Crawling),
         );
         let period = library::clip(ClipId::Crawl).duration_ms as u32;
-        mgr.update(period as u64, &mut actor);
-        assert_eq!(actor.y, floor_y());
-        assert_eq!(
-            actor.x - start_x,
-            library::clip(ClipId::Crawl).travel_dx as i32
-        );
+        let vx = actor.vx;
+        assert!(vx > 0);
+        actor.integrate(period);
+        assert_eq!(actor.y, start_y);
+        assert_eq!(actor.x - start_x, vx * period as i32 / 1000);
 
         actor.facing_left = true;
+        actor.apply_clip_velocity();
         let mid_x = actor.x;
-        mgr.update(period as u64, &mut actor);
-        assert_eq!(
-            mid_x - actor.x,
-            library::clip(ClipId::Crawl).travel_dx as i32
-        );
-        assert_eq!(actor.y, floor_y());
+        let vx = actor.vx;
+        actor.integrate(period);
+        assert_eq!(mid_x - actor.x, vx.abs() * period as i32 / 1000);
+        assert_eq!(actor.y, start_y);
     }
 
     #[test]
-    fn airborne_walk_does_not_pin_y() {
+    fn walk_loco_does_not_change_y() {
         let mut mgr = BehaviorManager::new();
         let mut actor = Actor::default();
         let y0 = floor_y() - 24;
         actor.y = y0;
-        mgr.update_loco(50, &mut actor, floor_y(), true);
+        mgr.update(50, &mut actor);
         assert_eq!(actor.y, y0);
-        mgr.update_loco(50, &mut actor, floor_y(), false);
-        assert_eq!(actor.y, floor_y());
     }
 }

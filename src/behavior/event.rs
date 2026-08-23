@@ -11,7 +11,7 @@ pub enum Event {
     Collision,
     /// A looping clip completed one cycle. Held / `Once` poses never emit this.
     BehaviorFinished,
-    /// Left a raised baseline; gravity is pulling toward the default floor.
+    /// Left a supporting edge with a downward or rest vector.
     Falling,
 }
 
@@ -21,6 +21,9 @@ pub struct EventCtx {
     pub collision: Option<CollisionKind>,
     pub other_x: Option<i32>,
     pub other_facing_left: Option<bool>,
+    /// Outward normal of the hit edge (into free space). Zero if unused.
+    pub nx: i8,
+    pub ny: i8,
 }
 
 /// xorshift32; state is never zero.

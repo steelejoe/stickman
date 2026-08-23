@@ -10,8 +10,9 @@ use embedded_graphics::primitives::Rectangle;
 
 /// Sample `actor`'s clip into `out` (FK + optional spin).
 ///
-/// After FK, the pose is lifted so the body does not sit below `actor.y`
-/// (the floor, or the aerial foot line while jumping).
+/// After FK, the pose is lifted so contact points do not sit below the root
+/// (`actor.y` — the feet line from physics, not a world-floor special case),
+/// then rotated to the floor tangent when the feet are on a ramp.
 pub fn sample(actor: &Actor, out: &mut PoseScratch) {
     let clip = library::clip(actor.clip);
     let species = clip.species;
@@ -102,16 +103,41 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
         }
     }
 
-    plant_on_baseline(out, root.y);
+    plant_feet(out, root.y);
+    align_to_surface(out, actor);
 }
 
-/// Lift the pose so the body does not sit below `baseline_y` (never lower it).
+/// Lift the pose so contact points do not sit below the root (never lower it).
 /// Sword / fist / guard are ignored so a low blade does not levitate the figure.
-fn plant_on_baseline(out: &mut PoseScratch, baseline_y: i32) {
+/// Rotate the planted pose so its local ground matches the floor tangent.
+///
+/// Only when the feet sit on the display polyline (air and model lids stay
+/// upright). Pivot is the physics root so downhill contacts drop and uphill
+/// contacts rise — crawl hands sit below the knees on a descent.
+fn align_to_surface(out: &mut PoseScratch, actor: &Actor) {
+    const SLOP: i32 = 2;
+    if (actor.y - geometry::floor_y_at(actor.x)).abs() > SLOP {
+        return;
+    }
+    let tilt = geometry::floor_slope_deg_at(actor.x);
+    if tilt == 0 {
+        return;
+    }
+    let pivot = (actor.x, actor.y);
+    for i in 0..out.n {
+        let o = rotate_point_cw((out.origin[i].x, out.origin[i].y), pivot, tilt);
+        let t = rotate_point_cw((out.tip[i].x, out.tip[i].y), pivot, tilt);
+        out.origin[i] = Point::new(o.0, o.1);
+        out.tip[i] = Point::new(t.0, t.1);
+    }
+    out.spin_deg += tilt;
+}
+
+fn plant_feet(out: &mut PoseScratch, root_y: i32) {
     let Some(lowest) = contact_lowest_y(out) else {
         return;
     };
-    let dy = lowest - baseline_y;
+    let dy = lowest - root_y;
     if dy <= 0 {
         return;
     }
@@ -402,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn clips_do_not_dip_below_baseline() {
+    fn clips_do_not_dip_below_root() {
         for clip_id in ALL_CLIPS {
             let clip = library::clip(clip_id);
             let step = 50u32.min(clip.duration_ms.max(1) as u32);
@@ -412,7 +438,7 @@ mod tests {
                 let lowest = contact_lowest_y(&pose).expect("contact");
                 assert!(
                     lowest <= 200,
-                    "{clip_id:?} t={t}: contact y {lowest} below baseline 200"
+                    "{clip_id:?} t={t}: contact y {lowest} below root 200"
                 );
                 t += step;
             }
@@ -420,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn crouched_sword_plants_on_baseline() {
+    fn crouched_sword_plants_on_root() {
         let pose = sample_at(crate::stickman::ir::ClipId::SwordCrouchStance, 0);
         let lowest = contact_lowest_y(&pose).expect("contact");
         assert_eq!(lowest, 200);
@@ -467,8 +493,70 @@ mod tests {
         );
     }
 
+    fn mean_tip_y(pose: &PoseScratch, a: usize, b: usize) -> i32 {
+        (pose.tip[a].y + pose.tip[b].y) / 2
+    }
+
+    fn sample_crawl_on_floor(x: i32, facing_left: bool) -> PoseScratch {
+        let mut actor = Actor::default();
+        actor.play(crate::stickman::ir::ClipId::Crawl);
+        actor.x = x;
+        actor.y = geometry::floor_y_at(x);
+        actor.facing_left = facing_left;
+        let mut pose = PoseScratch::new();
+        sample(&actor, &mut pose);
+        pose
+    }
+
     #[test]
-    fn box_sits_on_baseline_at_half_stickman_height() {
+    fn crawl_on_downhill_drops_hands_below_knees() {
+        let x = crate::DISPLAY_WIDTH as i32 * 2 / 3 - 20;
+        assert!(geometry::floor_slope_deg_at(x) > 0);
+        let pose = sample_crawl_on_floor(x, false);
+        let hands = mean_tip_y(
+            &pose,
+            library::FOREARM_A as usize,
+            library::FOREARM_B as usize,
+        );
+        let knees = mean_tip_y(&pose, library::THIGH_A as usize, library::THIGH_B as usize);
+        assert!(
+            hands > knees,
+            "downhill crawl: hands y={hands} should be below knees y={knees}"
+        );
+    }
+
+    #[test]
+    fn crawl_on_uphill_raises_hands_above_knees() {
+        let x = crate::DISPLAY_WIDTH as i32 / 3 + 20;
+        assert!(geometry::floor_slope_deg_at(x) < 0);
+        let pose = sample_crawl_on_floor(x, false);
+        let hands = mean_tip_y(
+            &pose,
+            library::FOREARM_A as usize,
+            library::FOREARM_B as usize,
+        );
+        let knees = mean_tip_y(&pose, library::THIGH_A as usize, library::THIGH_B as usize);
+        assert!(
+            hands < knees,
+            "uphill crawl: hands y={hands} should be above knees y={knees}"
+        );
+    }
+
+    #[test]
+    fn airborne_pose_stays_upright_over_a_ramp() {
+        let x = crate::DISPLAY_WIDTH as i32 * 2 / 3 - 20;
+        let mut actor = Actor::default();
+        actor.play(crate::stickman::ir::ClipId::Idle);
+        actor.x = x;
+        actor.y = geometry::floor_y_at(x) - 40;
+        let mut pose = PoseScratch::new();
+        sample(&actor, &mut pose);
+        let head = pose.tip[library::HEAD as usize];
+        assert_eq!(head.x, x);
+    }
+
+    #[test]
+    fn box_sits_on_root_at_half_stickman_height() {
         let mut actor = Actor::default();
         actor.play(crate::stickman::ir::ClipId::BoxIdle);
         actor.x = 100;
@@ -506,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn box_hitbox_is_unpadded_on_baseline() {
+    fn box_hitbox_is_unpadded_on_root() {
         let mut actor = Actor::default();
         actor.play(crate::stickman::ir::ClipId::BoxIdle);
         actor.x = 100;
@@ -520,5 +608,28 @@ mod tests {
             Size::new(library::BOX_WIDTH, library::BOX_HEIGHT)
         );
         assert_eq!(box_hit.top_left.y + box_hit.size.height as i32, 200);
+    }
+
+    #[test]
+    fn sword_pose_hitbox_includes_the_blade() {
+        let idle = sample_at(crate::stickman::ir::ClipId::Idle, 0);
+        let stance = sample_at(crate::stickman::ir::ClipId::SwordStance, 0);
+        assert!(stance.visible[library::SWORD as usize]);
+        assert!(stance.visible[library::GUARD as usize]);
+        assert!(stance.visible[library::FIST as usize]);
+        let blade = stance.tip[library::SWORD as usize];
+        let idle_hit = hitbox(&idle);
+        let sword_hit = hitbox(&stance);
+        assert!(
+            sword_hit.size.width > idle_hit.size.width,
+            "idle w={} sword w={}",
+            idle_hit.size.width,
+            sword_hit.size.width
+        );
+        let max_x = sword_hit.top_left.x + sword_hit.size.width as i32;
+        assert!(
+            blade.x >= sword_hit.top_left.x && blade.x <= max_x,
+            "blade tip {blade:?} outside hitbox {sword_hit:?}"
+        );
     }
 }

@@ -158,7 +158,7 @@ pub static STICKMAN: Species = Species {
     ],
 };
 
-/// Crate on the walk baseline. One rect bone; motion lives in the box clips.
+/// Crate on the floor edge. One rect bone; motion lives in the box clips.
 pub static BOX: Species = Species {
     bones: &[Bone {
         parent: -1,
@@ -655,7 +655,7 @@ static KNOCKBACK: Clip = Clip {
     species: &STICKMAN,
     duration_ms: WALK_MS,
     loop_mode: LoopMode::Loop,
-    travel_dx: -TRAVEL_DX,
+    travel_dx: TRAVEL_DX,
     spin: Spin::Knockback,
     tracks: &[
         track!(THIGH_A, Rot, (0, 50, Hold)),
@@ -685,7 +685,8 @@ const BOX_ROLL_DX: i16 = 50;
 const SHUDDER_MS: u16 = 400;
 const FLIP_MS: u16 = 300;
 
-/// Short looping turn; facing is toggled when the behavior starts.
+/// Short looping turn; facing follows the reversed travel vector (or toggles
+/// when standing still).
 static FLIP: Clip = Clip {
     species: &STICKMAN,
     duration_ms: FLIP_MS,
@@ -787,7 +788,7 @@ mod tests {
         assert_eq!(WALK.travel_dx, TRAVEL_DX);
         assert_eq!(TUMBLE.travel_dx, TRAVEL_DX);
         assert_eq!(JUMP_FORWARD.travel_dx, TRAVEL_DX);
-        assert_eq!(KNOCKBACK.travel_dx, -TRAVEL_DX);
+        assert_eq!(KNOCKBACK.travel_dx, TRAVEL_DX);
         assert_eq!(JUMP.travel_dx, 0);
         assert_eq!(CRAWL.travel_dx, CRAWL_DX);
         assert!(CRAWL.travel_dx < TRAVEL_DX);

@@ -1,8 +1,7 @@
 //! Floor line and pose strokes (embedded-graphics).
 
-use crate::stickman::geometry::{self, floor_y};
+use crate::stickman::geometry::{self, Segment, MAX_FLOOR_SEGS};
 use crate::stickman::ir::{BoneKind, PoseScratch};
-use crate::DISPLAY_WIDTH;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::pixelcolor::Rgb565;
@@ -17,12 +16,19 @@ pub fn draw_floor<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    let y = floor_y();
-    let max_x = DISPLAY_WIDTH as i32 - 1;
+    let mut segs = [Segment::ZERO; MAX_FLOOR_SEGS];
+    let n = geometry::fill_floor_segments(&mut segs);
     let style = PrimitiveStyle::with_stroke(WHITE, 1);
-    Line::new(Point::new(0, y), Point::new(max_x, y))
-        .into_styled(style)
-        .draw(display)
+    for i in 0..n {
+        let s = segs[i];
+        if s.x0 == s.x1 && s.y0 == s.y1 {
+            continue;
+        }
+        Line::new(Point::new(s.x0, s.y0), Point::new(s.x1, s.y1))
+            .into_styled(style)
+            .draw(display)?;
+    }
+    Ok(())
 }
 
 /// Draw the sampled pose in white.

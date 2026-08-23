@@ -63,11 +63,10 @@ mod tests {
     }
 
     #[test]
-    fn walking_collision_is_flip_then_walk_or_knockback() {
+    fn walking_collision_is_walk_idle_or_knockback() {
         let rows = stickman_weights(BehaviorId::Walking, Event::Collision, EventCtx::default());
-        assert!(rows
-            .iter()
-            .any(|(c, _)| *c == [BehaviorId::FlipFacing, BehaviorId::Walking]));
+        assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Walking]));
+        assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Idle]));
         assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Knockback]));
         assert!(!rows.iter().any(|(c, _)| {
             c.len() >= 2 && c[0] == BehaviorId::FlipFacing && c[1] == BehaviorId::Knockback
@@ -96,17 +95,23 @@ mod tests {
     }
 
     #[test]
-    fn walking_edge_collision_is_only_flip_then_walk() {
+    fn walking_edge_collision_is_walk_idle_or_knockback() {
         let ctx = EventCtx {
             collision: Some(CollisionKind::EdgeRight),
             ..EventCtx::default()
         };
         let rows = stickman_weights(BehaviorId::Walking, Event::Collision, ctx);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].0,
-            &[BehaviorId::FlipFacing, BehaviorId::Walking][..]
-        );
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Walking]));
+        assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Idle]));
+        assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Knockback]));
+        let walk_w: u16 = rows
+            .iter()
+            .filter(|(c, _)| *c == [BehaviorId::Walking])
+            .map(|(_, w)| *w)
+            .sum();
+        assert_eq!(max_chain(rows), &[BehaviorId::Walking][..]);
+        assert_eq!(walk_w, 40);
     }
 
     #[test]

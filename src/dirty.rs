@@ -6,7 +6,7 @@
 //! a single [`DrawTarget::fill_contiguous`] (one window, streamed pixels).
 
 use crate::assets::Rgb565Image;
-use crate::stickman::geometry::floor_y;
+use crate::stickman::geometry::{self, Segment, MAX_FLOOR_SEGS};
 use crate::stickman::ir::PoseScratch;
 use crate::stickman::render;
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
@@ -144,7 +144,9 @@ where
 fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Option<&Rgb565Image<'_>>) {
     let w = width as usize;
     let h = buf.len() / w;
-    let fy = floor_y();
+    let mut segs = [Segment::ZERO; MAX_FLOOR_SEGS];
+    let n = geometry::fill_floor_segments(&mut segs);
+    let floor = &segs[..n];
     for row in 0..h {
         let y = area.top_left.y + row as i32;
         for col in 0..w {
@@ -153,7 +155,7 @@ fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Option<&Rgb5
                 Some(img) => img.pixel(x, y).unwrap_or(Rgb565::BLACK),
                 None => Rgb565::BLACK,
             };
-            if y == fy {
+            if y == geometry::floor_y_at_in(floor, x) {
                 color = Rgb565::WHITE;
             }
             buf[row * w + col] = color;

@@ -2,7 +2,6 @@
 
 use crate::behavior::event::{Event, EventCtx, Rng32};
 use crate::collision::CollisionKind;
-use crate::stickman::geometry::floor_y;
 use crate::stickman::ir::{Actor, ClipId};
 
 /// Kind-specific box behaviors.
@@ -51,6 +50,7 @@ impl BoxBrain {
             && event == Event::Collision
         {
             apply_push_facing(actor, ctx);
+            actor.apply_clip_velocity();
         }
     }
 
@@ -60,6 +60,10 @@ impl BoxBrain {
             apply_push_facing(actor, ctx);
         }
         actor.play(id.clip());
+        match id {
+            BoxBehaviorId::Sliding | BoxBehaviorId::Rolling => actor.apply_clip_velocity(),
+            BoxBehaviorId::Idle | BoxBehaviorId::Shudder => actor.vx = 0,
+        }
     }
 
     /// Advance clip + loco. Returns true when a looping clip finished a cycle.
@@ -69,11 +73,10 @@ impl BoxBrain {
         let finished = actor.advance(dt);
         match self.current {
             BoxBehaviorId::Idle | BoxBehaviorId::Shudder => {
-                actor.y = floor_y();
+                actor.vx = 0;
             }
             BoxBehaviorId::Sliding | BoxBehaviorId::Rolling => {
-                actor.x += actor.take_travel(dt);
-                actor.y = floor_y();
+                actor.apply_clip_velocity();
             }
         }
         finished
@@ -182,12 +185,15 @@ mod tests {
         let mut actor = Actor::default();
         brain.switch(&mut actor, BoxBehaviorId::Sliding, EventCtx::default());
         actor.facing_left = false;
+        actor.apply_clip_velocity();
         let x0 = actor.x;
-        brain.update(200, &mut actor);
+        let dt = 200;
+        actor.integrate(dt);
         assert!(actor.x > x0);
         actor.facing_left = true;
+        actor.apply_clip_velocity();
         let x1 = actor.x;
-        brain.update(200, &mut actor);
+        actor.integrate(dt);
         assert!(actor.x < x1);
     }
 
