@@ -56,22 +56,30 @@ impl Bubble {
     }
 }
 
-/// Layout a balloon above `pose`'s head. `prefer_left` picks a side; the other
-/// side is used when that would clip the display.
+/// Layout a balloon above a head circle, or the top of a crate.
 pub fn for_pose(pose: &PoseScratch, text: &str, prefer_left: bool) -> Option<Bubble> {
     if text.is_empty() {
         return None;
     }
-    let i = library::HEAD as usize;
-    if i >= pose.n {
-        return None;
+    let (anchor, radius) = speech_anchor(pose)?;
+    Some(layout(anchor, radius, text, prefer_left))
+}
+
+fn speech_anchor(pose: &PoseScratch) -> Option<(Point, i32)> {
+    let species = pose.species?;
+    let head = library::HEAD as usize;
+    if head < pose.n {
+        if let BoneKind::Circle { diameter } = species.bones.get(head)?.kind {
+            return Some((pose.tip[head], (diameter as i32 + 1) / 2));
+        }
     }
-    let head = pose.tip[i];
-    let radius = match pose.species?.bones.get(i).map(|b| b.kind) {
-        Some(BoneKind::Circle { diameter }) => (diameter as i32 + 1) / 2,
-        _ => 6,
-    };
-    Some(layout(head, radius, text, prefer_left))
+    for i in 0..pose.n {
+        if let BoneKind::Rect { width: _, height } = species.bones.get(i)?.kind {
+            let origin = pose.origin[i];
+            return Some((Point::new(origin.x, origin.y - height as i32), 4));
+        }
+    }
+    None
 }
 
 pub fn layout(head: Point, head_r: i32, text: &str, prefer_left: bool) -> Bubble {
@@ -87,8 +95,8 @@ pub fn layout(head: Point, head_r: i32, text: &str, prefer_left: bool) -> Bubble
     );
 
     let tip = Point::new(head.x, head.y - head_r - 1);
-    // Base sits inside the body so the wedge covers the bottom stroke.
-    let base_y = body_y + body_h - 3;
+    // Flush with the bottom edge; the body is drawn over any inward overlap.
+    let base_y = body_y + body_h;
     let inset = corner as i32 + 3;
     let (x0, x1) = if left {
         let x1 = body_x + body_w - inset;
@@ -157,9 +165,7 @@ where
     .into_styled(shadow)
     .draw(display)?;
 
-    rounded(bubble.body, bubble.corner)
-        .into_styled(fill_stroke)
-        .draw(display)?;
+    // Tail first, then the body on top so side strokes cannot enter the interior.
     Triangle::new(bubble.tail[0], bubble.tail[1], bubble.tail[2])
         .into_styled(fill_white)
         .draw(display)?;
@@ -169,6 +175,22 @@ where
     Line::new(bubble.tail[1], bubble.tail[2])
         .into_styled(edge)
         .draw(display)?;
+    rounded(bubble.body, bubble.corner)
+        .into_styled(fill_stroke)
+        .draw(display)?;
+
+    // Open the bottom stroke where the tail attaches so the outline is one piece.
+    let join_l = bubble.tail[0].x.min(bubble.tail[1].x) + STROKE as i32;
+    let join_r = bubble.tail[0].x.max(bubble.tail[1].x) - STROKE as i32;
+    if join_r > join_l {
+        let y = bubble.body.top_left.y + bubble.body.size.height as i32 - STROKE as i32;
+        Rectangle::new(
+            Point::new(join_l, y),
+            Size::new((join_r - join_l) as u32, STROKE + 1),
+        )
+        .into_styled(fill_white)
+        .draw(display)?;
+    }
 
     let style = MonoTextStyle::new(FONT, BLACK);
     Text::with_baseline(bubble.text(), bubble.text_pos, style, Baseline::Top).draw(display)?;
@@ -333,5 +355,62 @@ mod tests {
             black > 20,
             "outline and text should paint black, got {black}"
         );
+    }
+
+    #[test]
+    fn tail_strokes_do_not_enter_the_body() {
+        use crate::dirty::SliceDisplay;
+        let head = Point::new(28, 72);
+        let bubble = layout(head, 6, "Hi", false);
+        const W: u32 = 100;
+        const H: u32 = 80;
+        let mut buf = [Rgb565::RED; (W * H) as usize];
+        let mut display = SliceDisplay::new(&mut buf, W, H);
+        draw(&mut display, &bubble).unwrap();
+
+        let x0 = bubble.body.top_left.x + bubble.corner as i32 + 1;
+        let x1 = bubble.body.top_left.x + bubble.body.size.width as i32 - bubble.corner as i32 - 1;
+        let y0 = bubble.body.top_left.y + bubble.corner as i32 + 1;
+        // Stay above the bottom stroke and the tail join.
+        let y1 = bubble.body.top_left.y + bubble.body.size.height as i32 - STROKE as i32 - 2;
+        let (tw, th) = text_size(bubble.text());
+        let tx0 = bubble.text_pos.x - 1;
+        let ty0 = bubble.text_pos.y - 1;
+        let tx1 = bubble.text_pos.x + tw + 1;
+        let ty1 = bubble.text_pos.y + th + 1;
+        let mut interior_black = 0u32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if x >= tx0 && x < tx1 && y >= ty0 && y < ty1 {
+                    continue;
+                }
+                if x >= 0 && y >= 0 && (x as u32) < W && (y as u32) < H {
+                    let c = buf[(y as u32 * W + x as u32) as usize];
+                    if c == BLACK {
+                        interior_black += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            interior_black, 0,
+            "tail outline leaked into the interior ({interior_black} black px)"
+        );
+    }
+
+    #[test]
+    fn box_pose_anchors_the_bubble_above_the_lid() {
+        use crate::stickman::eval;
+        use crate::stickman::ir::{Actor, ClipId};
+        let mut actor = Actor::default();
+        actor.play(ClipId::BoxIdle);
+        actor.x = 200;
+        actor.y = 200;
+        let mut pose = crate::stickman::ir::PoseScratch::new();
+        eval::sample(&actor, &mut pose);
+        let bubble = for_pose(&pose, "Ouch!", false).expect("crate top");
+        let lid = 200 - crate::stickman::library::BOX_HEIGHT as i32;
+        assert!(bubble.bounds.top_left.y < lid);
+        assert_eq!(bubble.text(), "Ouch!");
     }
 }

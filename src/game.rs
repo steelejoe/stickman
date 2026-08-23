@@ -44,6 +44,8 @@ pub struct Game {
     box_grounded: bool,
     /// Previous stickman behavior (bubble overlay is not stored on [`Actor`]).
     prev_behavior: Option<BehaviorId>,
+    /// Previous crate behavior (same reason as [`Self::prev_behavior`]).
+    prev_box_behavior: Option<crate::behavior::box_beh::BoxBehaviorId>,
 }
 
 impl Game {
@@ -71,6 +73,7 @@ impl Game {
             stick_grounded: true,
             box_grounded: true,
             prev_behavior: None,
+            prev_box_behavior: None,
         }
     }
 
@@ -83,6 +86,7 @@ impl Game {
         self.prev_rect = None;
         self.prev_box_rect = None;
         self.prev_behavior = None;
+        self.prev_box_behavior = None;
     }
 
     /// True when a backdrop image is installed.
@@ -104,16 +108,18 @@ impl Game {
         let on_stick = collision::contains_point(eval::hitbox(&self.scratch), p);
         let on_box = collision::contains_point(eval::hitbox(&self.box_scratch), p);
         let entropy = x ^ y.wrapping_shl(16);
-        if on_stick {
-            self.behavior_mgr
-                .on_event(&mut self.actor, Event::Tap, EventCtx::default(), entropy);
-        } else if on_box {
+        // Prefer the crate when the point is on it (including overlap with the
+        // stickman AABB while standing on the lid).
+        if on_box {
             self.box_brain.on_event(
                 &mut self.box_actor,
                 Event::Tap,
                 EventCtx::default(),
                 entropy,
             );
+        } else if on_stick {
+            self.behavior_mgr
+                .on_event(&mut self.actor, Event::Tap, EventCtx::default(), entropy);
         } else {
             self.behavior_mgr.cycle_empty_tap(&mut self.actor, entropy);
         }
@@ -249,19 +255,19 @@ impl Game {
     fn sample_poses(&mut self) {
         eval::sample(&self.actor, &mut self.scratch);
         eval::sample(&self.box_actor, &mut self.box_scratch);
-        if self.behavior_mgr.is_talking() {
-            let mut buf = [0u8; 64];
-            let n = self.behavior_mgr.write_recent_names(&mut buf);
-            if n > 0 {
-                if let Ok(text) = core::str::from_utf8(&buf[..n]) {
-                    let bubble = crate::stickman::bubble::for_pose(
-                        &self.scratch,
-                        text,
-                        self.behavior_mgr.bubble_left(),
-                    );
-                    self.scratch.bubble = bubble;
-                }
-            }
+        if let Some(text) = self.behavior_mgr.talk_phrase() {
+            self.scratch.bubble = crate::stickman::bubble::for_pose(
+                &self.scratch,
+                text,
+                self.behavior_mgr.bubble_left(),
+            );
+        }
+        if let Some(text) = self.box_brain.talk_phrase() {
+            self.box_scratch.bubble = crate::stickman::bubble::for_pose(
+                &self.box_scratch,
+                text,
+                self.box_brain.bubble_left(),
+            );
         }
     }
 
@@ -271,6 +277,7 @@ impl Game {
             && self.prev_actor.as_ref() == Some(&self.actor)
             && self.prev_box.as_ref() == Some(&self.box_actor)
             && self.prev_behavior == Some(self.behavior_mgr.current())
+            && self.prev_box_behavior == Some(self.box_brain.current())
     }
 
     /// Draw the current frame if a pose changed.
@@ -295,7 +302,8 @@ impl Game {
         let new_box = eval::dirty_rect(&self.box_scratch);
         let stick_changed = self.prev_actor.as_ref() != Some(&self.actor)
             || self.prev_behavior != Some(self.behavior_mgr.current());
-        let box_changed = self.prev_box.as_ref() != Some(&self.box_actor);
+        let box_changed = self.prev_box.as_ref() != Some(&self.box_actor)
+            || self.prev_box_behavior != Some(self.box_brain.current());
 
         if stick_changed && box_changed {
             let area = union_optional(
@@ -361,6 +369,7 @@ impl Game {
         self.prev_actor = Some(self.actor);
         self.prev_box = Some(self.box_actor);
         self.prev_behavior = Some(self.behavior_mgr.current());
+        self.prev_box_behavior = Some(self.box_brain.current());
         Ok(())
     }
 }
@@ -437,6 +446,29 @@ mod tests {
         game.on_tap(x, y);
         assert_eq!(game.actor.clip, stick_clip);
         assert!(game.actor.facing_left);
+        assert!(matches!(
+            game.box_actor.clip,
+            ClipId::BoxIdle | ClipId::BoxSlide | ClipId::BoxRoll | ClipId::BoxShudder
+        ));
+    }
+
+    #[test]
+    fn tap_on_box_wins_when_stickman_overlaps() {
+        let mut game = Game::new();
+        game.actor.x = game.box_actor.x;
+        game.actor.y = game.box_actor.y;
+        eval::sample(&game.actor, &mut game.scratch);
+        eval::sample(&game.box_actor, &mut game.box_scratch);
+        let hit = eval::hitbox(&game.box_scratch);
+        let p = Point::new(
+            hit.top_left.x + hit.size.width as i32 / 2,
+            hit.top_left.y + hit.size.height as i32 / 2,
+        );
+        assert!(collision::contains_point(eval::hitbox(&game.scratch), p));
+        assert!(collision::contains_point(hit, p));
+        let stick_clip = game.actor.clip;
+        game.on_tap(p.x as u32, p.y as u32);
+        assert_eq!(game.actor.clip, stick_clip);
         assert!(matches!(
             game.box_actor.clip,
             ClipId::BoxIdle | ClipId::BoxSlide | ClipId::BoxRoll | ClipId::BoxShudder
@@ -539,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn talking_draws_a_bubble_of_recent_names_above_the_head() {
+    fn talking_draws_a_dialog_bubble_above_the_head() {
         let mut game = Game::new();
         for _ in 0..32 {
             game.on_cycle_input();
@@ -552,13 +584,35 @@ mod tests {
         let bubble = game.scratch.bubble.expect("talking should attach a bubble");
         let head = game.scratch.tip[library::HEAD as usize];
         assert!(bubble.bounds.top_left.y < head.y);
-        let mut buf = [0u8; 64];
-        let n = game.behavior_mgr.write_recent_names(&mut buf);
-        assert_eq!(bubble.text().as_bytes(), &buf[..n]);
-        assert_eq!(bubble.text().bytes().filter(|&b| b == b'\n').count(), 2);
+        assert!(crate::behavior::dialog::STICKMAN_LINES.contains(&bubble.text()));
         let dirty = eval::dirty_rect(&game.scratch);
         assert!(dirty.top_left.y <= bubble.bounds.top_left.y);
         assert!(dirty.size.width <= crate::dirty::DIRTY_MAX_W);
         assert!(dirty.size.height <= crate::dirty::DIRTY_MAX_H);
+    }
+
+    #[test]
+    fn box_talking_draws_a_dialog_bubble() {
+        let mut game = Game::new();
+        let mut talked = false;
+        for i in 0..800u32 {
+            game.box_brain.on_event(
+                &mut game.box_actor,
+                Event::Tap,
+                EventCtx::default(),
+                i.wrapping_mul(0x9E37_79B9),
+            );
+            if game.box_brain.is_talking() {
+                talked = true;
+                break;
+            }
+        }
+        assert!(talked, "1% talking should appear within 800 taps");
+        game.update(0);
+        let bubble = game
+            .box_scratch
+            .bubble
+            .expect("talking crate should attach a bubble");
+        assert!(crate::behavior::dialog::BOX_LINES.contains(&bubble.text()));
     }
 }

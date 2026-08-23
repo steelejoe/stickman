@@ -254,8 +254,8 @@ fn main() {
         let mouse = window.get_mouse_down(MouseButton::Left);
         if mouse && !prev_mouse {
             if let Some((x, y)) = window.get_mouse_pos(MouseMode::Clamp) {
-                // Scale::X2 window; convert to display pixels.
-                game.on_tap((x as u32) / 2, (y as u32) / 2);
+                // `get_mouse_pos` is already in buffer / display pixels.
+                game.on_tap(x as u32, y as u32);
             }
         }
         prev_mouse = mouse;

@@ -31,7 +31,15 @@ mod tests {
             max_item(box_weights(BoxBehaviorId::Idle, Event::Collision)),
             BoxBehaviorId::Idle
         );
-        assert_eq!(BOX_IDLE_COLLIDE[0], (BoxBehaviorId::Idle, 80));
+        assert_eq!(BOX_IDLE_COLLIDE[0], (BoxBehaviorId::Idle, 79));
+        let talk: u16 = BOX_IDLE_COLLIDE
+            .iter()
+            .filter(|(id, _)| *id == BoxBehaviorId::Talking)
+            .map(|(_, w)| *w)
+            .sum();
+        let total: u16 = BOX_IDLE_COLLIDE.iter().map(|(_, w)| *w).sum();
+        assert_eq!(talk, 1);
+        assert_eq!(total, 100);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 //! Add a behavior with one row in [`behaviors!`]. Unique update code is a
 //! [`Loco`] variant, not a new file.
 
+use crate::behavior::dialog::{self, STICKMAN_LINES};
 use crate::behavior::event::{Event, EventCtx, Rng32};
 use crate::collision::{self, CollisionKind};
 use crate::stickman::geometry::{self, floor_y, JUMP_FORWARD_RISE};
@@ -109,11 +110,10 @@ pub struct BehaviorManager {
     switch_remain_ms: u32,
     /// Remainder of a multi-step table outcome (`steps[next..]`).
     chain: Option<(&'static [BehaviorId], usize)>,
-    /// Last three behaviors entered before the current one.
-    recent: [BehaviorId; 3],
-    recent_n: u8,
     /// Preferred speech-bubble side while [`BehaviorId::Talking`].
     bubble_left: bool,
+    /// Line shown while talking.
+    phrase: &'static str,
 }
 
 impl BehaviorManager {
@@ -125,9 +125,8 @@ impl BehaviorManager {
             timer_ms: 0,
             switch_remain_ms: AUTO_SWITCH_MAX_MS,
             chain: None,
-            recent: [BehaviorId::Walking; 3],
-            recent_n: 0,
             bubble_left: false,
+            phrase: "",
         };
         this.roll_auto_switch();
         this
@@ -146,27 +145,13 @@ impl BehaviorManager {
         self.bubble_left
     }
 
-    /// Write the last (up to three) behavior names, one per line. Returns bytes.
-    pub fn write_recent_names(&self, buf: &mut [u8]) -> usize {
-        let n = self.recent_n as usize;
-        if n == 0 || buf.is_empty() {
-            return 0;
+    /// Spoken line while [`BehaviorId::Talking`].
+    pub fn talk_phrase(&self) -> Option<&'static str> {
+        if self.is_talking() && !self.phrase.is_empty() {
+            Some(self.phrase)
+        } else {
+            None
         }
-        let mut i = 0usize;
-        for k in 0..n {
-            if k > 0 {
-                if i >= buf.len() {
-                    break;
-                }
-                buf[i] = b'\n';
-                i += 1;
-            }
-            let name = self.recent[k].name().as_bytes();
-            let take = name.len().min(buf.len().saturating_sub(i));
-            buf[i..i + take].copy_from_slice(&name[..take]);
-            i += take;
-        }
-        i
     }
 
     /// True while a jump loco is playing (impulse already applied).
@@ -175,14 +160,12 @@ impl BehaviorManager {
     }
 
     fn switch(&mut self, actor: &mut Actor, id: BehaviorId, index: usize) {
-        if self.current != id {
-            self.push_recent(self.current);
-        }
         self.index = index;
         self.current = id;
         self.timer_ms = 0;
         if id == BehaviorId::Talking {
             self.bubble_left = self.rng.next_u32() & 1 == 1;
+            self.phrase = dialog::pick_line(&mut self.rng, STICKMAN_LINES);
         }
         if id == BehaviorId::FlipFacing {
             // Turn around: reverse any travel vector, then face along it.
@@ -205,17 +188,6 @@ impl BehaviorManager {
     fn roll_auto_switch(&mut self) {
         let span = AUTO_SWITCH_MAX_MS - AUTO_SWITCH_MIN_MS + 1;
         self.switch_remain_ms = AUTO_SWITCH_MIN_MS + self.rng.next_u32() % span;
-    }
-
-    fn push_recent(&mut self, id: BehaviorId) {
-        if (self.recent_n as usize) < self.recent.len() {
-            self.recent[self.recent_n as usize] = id;
-            self.recent_n += 1;
-            return;
-        }
-        self.recent[0] = self.recent[1];
-        self.recent[1] = self.recent[2];
-        self.recent[2] = id;
     }
 
     pub fn cycle_next(&mut self, actor: &mut Actor) {
@@ -809,21 +781,16 @@ mod tests {
     }
 
     #[test]
-    fn talking_history_is_the_last_three_names() {
+    fn talking_picks_a_dialog_line() {
         let mut mgr = BehaviorManager::new();
         let mut actor = Actor::default();
-        mgr.cycle_next(&mut actor);
-        mgr.cycle_next(&mut actor);
-        mgr.cycle_next(&mut actor);
-        assert_eq!(mgr.current, BehaviorId::JumpForward);
         mgr.switch(
             &mut actor,
             BehaviorId::Talking,
             BehaviorManager::index_of(BehaviorId::Talking),
         );
-        let mut buf = [0u8; 64];
-        let n = mgr.write_recent_names(&mut buf);
-        assert_eq!(&buf[..n], b"Idle\nJumping\nJumpForward");
+        let line = mgr.talk_phrase().expect("talking should pick a line");
+        assert!(STICKMAN_LINES.contains(&line));
         assert!(mgr.is_talking());
         assert_eq!(actor.clip, ClipId::Idle);
         assert_eq!(actor.vx, 0);
