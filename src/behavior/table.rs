@@ -138,5 +138,6 @@ mod tests {
         assert_eq!(total, 100);
         assert_eq!(flip_w, 15);
         assert_eq!(max_chain(rows), &[BehaviorId::FlipFacing][..]);
+        assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Talking]));
     }
 }

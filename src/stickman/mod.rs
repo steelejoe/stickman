@@ -1,3 +1,4 @@
+pub mod bubble;
 pub mod eval;
 pub mod geometry;
 pub mod ir;

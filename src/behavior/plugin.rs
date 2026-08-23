@@ -1,6 +1,7 @@
 //! Behavior table: cycle order, clip, and locomotion.
 //!
-//! Drawing is not per-behavior. Each row names a [`ClipId`]; [`crate::game::Game`]
+//! Drawing is not per-behavior except [`BehaviorId::Talking`], which overlays a
+//! speech bubble above the head. Each row names a [`ClipId`]; [`crate::game::Game`]
 //! evaluates that clip. This module sets the travel vector (walk / jump impulse).
 //! Facing follows that vector. Gravity, integration, and edge reflection live
 //! in [`crate::collision`]; entered hits still roll this table.
@@ -67,6 +68,12 @@ macro_rules! behaviors {
             fn emits_cycle_finished(self) -> bool {
                 library::clip(self.clip()).loop_mode == LoopMode::Loop
             }
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$id => stringify!($id),)+
+                }
+            }
         }
     };
 }
@@ -87,6 +94,7 @@ behaviors! {
     (Knockback, Knockback, Knockback),
     (Tumbling, Tumble, WalkBounce),
     (FlipFacing, Flip, InPlace),
+    (Talking, Idle, InPlace),
 }
 
 /// Current behavior, cycle index, and RNG. Search timer lives here so
@@ -101,6 +109,11 @@ pub struct BehaviorManager {
     switch_remain_ms: u32,
     /// Remainder of a multi-step table outcome (`steps[next..]`).
     chain: Option<(&'static [BehaviorId], usize)>,
+    /// Last three behaviors entered before the current one.
+    recent: [BehaviorId; 3],
+    recent_n: u8,
+    /// Preferred speech-bubble side while [`BehaviorId::Talking`].
+    bubble_left: bool,
 }
 
 impl BehaviorManager {
@@ -112,6 +125,9 @@ impl BehaviorManager {
             timer_ms: 0,
             switch_remain_ms: AUTO_SWITCH_MAX_MS,
             chain: None,
+            recent: [BehaviorId::Walking; 3],
+            recent_n: 0,
+            bubble_left: false,
         };
         this.roll_auto_switch();
         this
@@ -121,15 +137,53 @@ impl BehaviorManager {
         self.current
     }
 
+    pub fn is_talking(&self) -> bool {
+        self.current == BehaviorId::Talking
+    }
+
+    /// Side of the head for the speech bubble (rolled when talking starts).
+    pub fn bubble_left(&self) -> bool {
+        self.bubble_left
+    }
+
+    /// Write the last (up to three) behavior names, one per line. Returns bytes.
+    pub fn write_recent_names(&self, buf: &mut [u8]) -> usize {
+        let n = self.recent_n as usize;
+        if n == 0 || buf.is_empty() {
+            return 0;
+        }
+        let mut i = 0usize;
+        for k in 0..n {
+            if k > 0 {
+                if i >= buf.len() {
+                    break;
+                }
+                buf[i] = b'\n';
+                i += 1;
+            }
+            let name = self.recent[k].name().as_bytes();
+            let take = name.len().min(buf.len().saturating_sub(i));
+            buf[i..i + take].copy_from_slice(&name[..take]);
+            i += take;
+        }
+        i
+    }
+
     /// True while a jump loco is playing (impulse already applied).
     pub fn in_jump_arc(&self) -> bool {
         matches!(self.current.loco(), Loco::Jump | Loco::JumpForward)
     }
 
     fn switch(&mut self, actor: &mut Actor, id: BehaviorId, index: usize) {
+        if self.current != id {
+            self.push_recent(self.current);
+        }
         self.index = index;
         self.current = id;
         self.timer_ms = 0;
+        if id == BehaviorId::Talking {
+            self.bubble_left = self.rng.next_u32() & 1 == 1;
+        }
         if id == BehaviorId::FlipFacing {
             // Turn around: reverse any travel vector, then face along it.
             actor.vx = -actor.vx;
@@ -151,6 +205,17 @@ impl BehaviorManager {
     fn roll_auto_switch(&mut self) {
         let span = AUTO_SWITCH_MAX_MS - AUTO_SWITCH_MIN_MS + 1;
         self.switch_remain_ms = AUTO_SWITCH_MIN_MS + self.rng.next_u32() % span;
+    }
+
+    fn push_recent(&mut self, id: BehaviorId) {
+        if (self.recent_n as usize) < self.recent.len() {
+            self.recent[self.recent_n as usize] = id;
+            self.recent_n += 1;
+            return;
+        }
+        self.recent[0] = self.recent[1];
+        self.recent[1] = self.recent[2];
+        self.recent[2] = id;
     }
 
     pub fn cycle_next(&mut self, actor: &mut Actor) {
@@ -350,8 +415,9 @@ pub fn stickman_weights(id: BehaviorId, event: Event, ctx: EventCtx) -> &'static
     }
     match (id, event) {
         (BehaviorId::Walking, Event::BehaviorFinished) => &[
-            (WALK, 70),
+            (WALK, 66),
             (IDLE, 8),
+            (TALK, 4),
             (JUMP, 6),
             (JUMP_FWD, 6),
             (CROUCH, 5),
@@ -397,6 +463,7 @@ const SWORD_CROUCH_STANCE: &[BehaviorId] = &[BehaviorId::SwordCrouchStance];
 const SWORD_CROUCH_STAB: &[BehaviorId] = &[BehaviorId::SwordCrouchStab];
 const SEARCH: &[BehaviorId] = &[BehaviorId::Searching];
 const BEG: &[BehaviorId] = &[BehaviorId::Begging];
+const TALK: &[BehaviorId] = &[BehaviorId::Talking];
 /// Tap / authored chain: reverse facing, then walk. Edge collisions use [`WALK`]
 /// instead — the bounce already turned the vector (and facing).
 #[allow(dead_code)]
@@ -413,8 +480,9 @@ const STICKMAN_EDGE: &[WeightedChain] = &[(WALK, 40), (IDLE, 30), (KNOCKBACK, 30
 
 const STICKMAN_TAP: &[WeightedChain] = &[
     (FLIP, 15),
-    (WALK, 10),
-    (IDLE, 9),
+    (WALK, 7),
+    (IDLE, 6),
+    (TALK, 6),
     (JUMP, 7),
     (JUMP_FWD, 7),
     (CROUCH, 6),
@@ -730,5 +798,34 @@ mod tests {
         actor.y = y0;
         mgr.update(50, &mut actor);
         assert_eq!(actor.y, y0);
+    }
+
+    #[test]
+    fn talking_reuses_idle_clip() {
+        assert_eq!(BehaviorId::Talking.clip(), ClipId::Idle);
+        assert_eq!(BehaviorId::Talking.loco(), Loco::InPlace);
+        assert_eq!(BehaviorId::Talking.name(), "Talking");
+        assert_ne!(BehaviorId::Talking, BehaviorId::Idle);
+    }
+
+    #[test]
+    fn talking_history_is_the_last_three_names() {
+        let mut mgr = BehaviorManager::new();
+        let mut actor = Actor::default();
+        mgr.cycle_next(&mut actor);
+        mgr.cycle_next(&mut actor);
+        mgr.cycle_next(&mut actor);
+        assert_eq!(mgr.current, BehaviorId::JumpForward);
+        mgr.switch(
+            &mut actor,
+            BehaviorId::Talking,
+            BehaviorManager::index_of(BehaviorId::Talking),
+        );
+        let mut buf = [0u8; 64];
+        let n = mgr.write_recent_names(&mut buf);
+        assert_eq!(&buf[..n], b"Idle\nJumping\nJumpForward");
+        assert!(mgr.is_talking());
+        assert_eq!(actor.clip, ClipId::Idle);
+        assert_eq!(actor.vx, 0);
     }
 }

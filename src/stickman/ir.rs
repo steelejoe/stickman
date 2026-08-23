@@ -266,6 +266,8 @@ pub struct PoseScratch {
     pub visible: [bool; MAX_BONES],
     /// Signed body spin (degrees) after facing. Used to rotate box rects.
     pub spin_deg: i32,
+    /// Optional speech bubble (stickman talking pose only).
+    pub bubble: Option<crate::stickman::bubble::Bubble>,
 }
 
 impl PoseScratch {
@@ -277,6 +279,7 @@ impl PoseScratch {
             tip: [embedded_graphics::geometry::Point::new(0, 0); MAX_BONES],
             visible: [false; MAX_BONES],
             spin_deg: 0,
+            bubble: None,
         }
     }
 }

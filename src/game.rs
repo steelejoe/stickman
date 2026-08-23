@@ -3,7 +3,7 @@
 use crate::assets::{self, Rgb565Image};
 use crate::behavior::box_beh::BoxBrain;
 use crate::behavior::event::{Event, EventCtx};
-use crate::behavior::plugin::BehaviorManager;
+use crate::behavior::plugin::{BehaviorId, BehaviorManager};
 use crate::collision::{
     self, align_to_support, apply_gravity, on_floor_polyline, ContactMemory, World,
 };
@@ -42,6 +42,8 @@ pub struct Game {
     stick_grounded: bool,
     /// Last tick the box was on a supporting edge.
     box_grounded: bool,
+    /// Previous stickman behavior (bubble overlay is not stored on [`Actor`]).
+    prev_behavior: Option<BehaviorId>,
 }
 
 impl Game {
@@ -68,6 +70,7 @@ impl Game {
             contacts: ContactMemory::new(),
             stick_grounded: true,
             box_grounded: true,
+            prev_behavior: None,
         }
     }
 
@@ -79,6 +82,7 @@ impl Game {
         self.prev_box = None;
         self.prev_rect = None;
         self.prev_box_rect = None;
+        self.prev_behavior = None;
     }
 
     /// True when a backdrop image is installed.
@@ -245,6 +249,20 @@ impl Game {
     fn sample_poses(&mut self) {
         eval::sample(&self.actor, &mut self.scratch);
         eval::sample(&self.box_actor, &mut self.box_scratch);
+        if self.behavior_mgr.is_talking() {
+            let mut buf = [0u8; 64];
+            let n = self.behavior_mgr.write_recent_names(&mut buf);
+            if n > 0 {
+                if let Ok(text) = core::str::from_utf8(&buf[..n]) {
+                    let bubble = crate::stickman::bubble::for_pose(
+                        &self.scratch,
+                        text,
+                        self.behavior_mgr.bubble_left(),
+                    );
+                    self.scratch.bubble = bubble;
+                }
+            }
+        }
     }
 
     /// True when the displayed poses already match the current actors.
@@ -252,6 +270,7 @@ impl Game {
         self.background_drawn
             && self.prev_actor.as_ref() == Some(&self.actor)
             && self.prev_box.as_ref() == Some(&self.box_actor)
+            && self.prev_behavior == Some(self.behavior_mgr.current())
     }
 
     /// Draw the current frame if a pose changed.
@@ -274,7 +293,8 @@ impl Game {
         self.sample_poses();
         let new_stick = eval::dirty_rect(&self.scratch);
         let new_box = eval::dirty_rect(&self.box_scratch);
-        let stick_changed = self.prev_actor.as_ref() != Some(&self.actor);
+        let stick_changed = self.prev_actor.as_ref() != Some(&self.actor)
+            || self.prev_behavior != Some(self.behavior_mgr.current());
         let box_changed = self.prev_box.as_ref() != Some(&self.box_actor);
 
         if stick_changed && box_changed {
@@ -340,6 +360,7 @@ impl Game {
         self.prev_box_rect = Some(new_box);
         self.prev_actor = Some(self.actor);
         self.prev_box = Some(self.box_actor);
+        self.prev_behavior = Some(self.behavior_mgr.current());
         Ok(())
     }
 }
@@ -515,5 +536,29 @@ mod tests {
             game.actor.y
         );
         assert_eq!(game.actor.y, floor_y_at(game.actor.x));
+    }
+
+    #[test]
+    fn talking_draws_a_bubble_of_recent_names_above_the_head() {
+        let mut game = Game::new();
+        for _ in 0..32 {
+            game.on_cycle_input();
+            if game.behavior_mgr.is_talking() {
+                break;
+            }
+        }
+        assert!(game.behavior_mgr.is_talking());
+        game.update(0);
+        let bubble = game.scratch.bubble.expect("talking should attach a bubble");
+        let head = game.scratch.tip[library::HEAD as usize];
+        assert!(bubble.bounds.top_left.y < head.y);
+        let mut buf = [0u8; 64];
+        let n = game.behavior_mgr.write_recent_names(&mut buf);
+        assert_eq!(bubble.text().as_bytes(), &buf[..n]);
+        assert_eq!(bubble.text().bytes().filter(|&b| b == b'\n').count(), 2);
+        let dirty = eval::dirty_rect(&game.scratch);
+        assert!(dirty.top_left.y <= bubble.bounds.top_left.y);
+        assert!(dirty.size.width <= crate::dirty::DIRTY_MAX_W);
+        assert!(dirty.size.height <= crate::dirty::DIRTY_MAX_H);
     }
 }

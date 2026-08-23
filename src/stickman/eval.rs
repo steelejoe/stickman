@@ -19,6 +19,7 @@ pub fn sample(actor: &Actor, out: &mut PoseScratch) {
     let n = species.bones.len().min(MAX_BONES);
     out.n = n;
     out.species = Some(species);
+    out.bubble = None;
 
     let mut angle = [0i32; MAX_BONES];
     let mut length = [0i32; MAX_BONES];
@@ -183,18 +184,19 @@ fn joint_tip(origin: Point, angle_deg: i32, length: i32, dir: i32) -> Point {
 
 /// Inclusive AABB of visible strokes (no dirty-tile padding).
 pub fn hitbox(pose: &PoseScratch) -> Rectangle {
-    match visible_aabb(pose) {
+    let body = match visible_aabb(pose) {
         Some((min_x, min_y, max_x, max_y)) => Rectangle::new(
             Point::new(min_x, min_y),
             Size::new((max_x - min_x).max(1) as u32, (max_y - min_y).max(1) as u32),
         ),
         None => fallback_rect(pose),
-    }
+    };
+    union_bubble(body, pose)
 }
 
 /// Inclusive AABB of visible strokes, padded for body thickness.
 pub fn dirty_rect(pose: &PoseScratch) -> Rectangle {
-    match visible_aabb(pose) {
+    let body = match visible_aabb(pose) {
         Some((min_x, min_y, max_x, max_y)) => {
             const PAD: i32 = 4;
             let w = (max_x - min_x + PAD * 2).max(1) as u32;
@@ -202,7 +204,32 @@ pub fn dirty_rect(pose: &PoseScratch) -> Rectangle {
             Rectangle::new(Point::new(min_x - PAD, min_y - PAD), Size::new(w, h))
         }
         None => fallback_rect(pose),
+    };
+    union_bubble(body, pose)
+}
+
+fn union_bubble(body: Rectangle, pose: &PoseScratch) -> Rectangle {
+    match pose.bubble {
+        Some(b) => union_rects(body, b.bounds),
+        None => body,
     }
+}
+
+fn union_rects(a: Rectangle, b: Rectangle) -> Rectangle {
+    if a.size.width == 0 || a.size.height == 0 {
+        return b;
+    }
+    if b.size.width == 0 || b.size.height == 0 {
+        return a;
+    }
+    let x0 = a.top_left.x.min(b.top_left.x);
+    let y0 = a.top_left.y.min(b.top_left.y);
+    let x1 = (a.top_left.x + a.size.width as i32).max(b.top_left.x + b.size.width as i32);
+    let y1 = (a.top_left.y + a.size.height as i32).max(b.top_left.y + b.size.height as i32);
+    Rectangle::new(
+        Point::new(x0, y0),
+        Size::new((x1 - x0) as u32, (y1 - y0) as u32),
+    )
 }
 
 fn fallback_rect(pose: &PoseScratch) -> Rectangle {

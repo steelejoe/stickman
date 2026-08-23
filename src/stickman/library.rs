@@ -158,7 +158,7 @@ pub static STICKMAN: Species = Species {
     ],
 };
 
-/// Crate on the floor edge. One rect bone; motion lives in the box clips.
+/// Crate on the floor edge. One rect bone (spiral fill); motion lives in the clips.
 pub static BOX: Species = Species {
     bones: &[Bone {
         parent: -1,
