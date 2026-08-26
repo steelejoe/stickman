@@ -74,3 +74,8 @@ TODOs:
 - [ ] Add CI for device (`make device`) and simulation (`make build-sim`) builds
 - [ ] Move display init out of `src/app.rs` into `src/hardware/display.rs` (currently a stub)
 
+Next Phase:
+- [ ] Add "mental state" support. Maybe an emotional barometer? Or a set of value for hunger, happness, and other metrics that make sense
+- [ ] Add connection between behaviors and mental state
+- [ ] Figure out what user behaviors do to impact mental state
+
