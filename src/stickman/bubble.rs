@@ -69,8 +69,15 @@ fn speech_anchor(pose: &PoseScratch) -> Option<(Point, i32)> {
     let species = pose.species?;
     let head = library::HEAD as usize;
     if head < pose.n {
-        if let BoneKind::Circle { diameter } = species.bones.get(head)?.kind {
-            return Some((pose.tip[head], (diameter as i32 + 1) / 2));
+        match species.bones.get(head)?.kind {
+            BoneKind::Circle { diameter } => {
+                return Some((pose.tip[head], (diameter as i32 + 1) / 2));
+            }
+            BoneKind::Ellipse { width, height } => {
+                let r = (width.max(height) as i32 + 1) / 2;
+                return Some((pose.tip[head], r));
+            }
+            _ => {}
         }
     }
     for i in 0..pose.n {

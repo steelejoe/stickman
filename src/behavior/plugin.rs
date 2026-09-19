@@ -9,7 +9,7 @@
 //! Add a behavior with one row in [`behaviors!`]. Unique update code is a
 //! [`Loco`] variant, not a new file.
 
-use crate::behavior::dialog::{self, STICKMAN_LINES};
+use crate::behavior::dialog::{self, DOG_LINES, STICKMAN_LINES};
 use crate::behavior::event::{Event, EventCtx, Rng32};
 use crate::collision::{self, CollisionKind};
 use crate::stickman::geometry::{self, floor_y, JUMP_FORWARD_RISE};
@@ -24,6 +24,13 @@ const AUTO_SWITCH_MIN_MS: u32 = 1000;
 const AUTO_SWITCH_MAX_MS: u32 = 5000;
 /// Empty-space tap chance of [`BehaviorId::FlipFacing`].
 const EMPTY_FLIP_PCT: u32 = 15;
+
+/// Which biped/quadruped table a [`BehaviorManager`] drives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FigureKind {
+    Stickman,
+    Dog,
+}
 
 /// World-logic mode. Most clips are [`Loco::InPlace`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,6 +82,42 @@ macro_rules! behaviors {
                     $(Self::$id => stringify!($id),)+
                 }
             }
+
+            pub fn clip_for(self, kind: FigureKind) -> ClipId {
+                match kind {
+                    FigureKind::Stickman => self.clip(),
+                    FigureKind::Dog => self.dog_clip(),
+                }
+            }
+
+            fn dog_clip(self) -> ClipId {
+                match self {
+                    Self::Walking => ClipId::DogWalk,
+                    Self::Idle | Self::Talking => ClipId::DogIdle,
+                    Self::Jumping => ClipId::DogJump,
+                    Self::JumpForward => ClipId::DogJumpForward,
+                    Self::Crouching | Self::Searching => ClipId::DogCrouch,
+                    Self::Crawling => ClipId::DogCrawl,
+                    Self::Begging => ClipId::DogBeg,
+                    Self::Knockback => ClipId::DogKnockback,
+                    Self::Tumbling => ClipId::DogTumble,
+                    Self::FlipFacing => ClipId::DogFlip,
+                    Self::SwordStance
+                    | Self::SwordStab
+                    | Self::SwordCrouchStance
+                    | Self::SwordCrouchStab => ClipId::DogIdle,
+                }
+            }
+
+            fn is_sword(self) -> bool {
+                matches!(
+                    self,
+                    Self::SwordStance
+                        | Self::SwordStab
+                        | Self::SwordCrouchStance
+                        | Self::SwordCrouchStab
+                )
+            }
         }
     };
 }
@@ -98,9 +141,25 @@ behaviors! {
     (Talking, Idle, InPlace),
 }
 
+const DOG_ORDER: &[BehaviorId] = &[
+    BehaviorId::Walking,
+    BehaviorId::Idle,
+    BehaviorId::Jumping,
+    BehaviorId::JumpForward,
+    BehaviorId::Crouching,
+    BehaviorId::Crawling,
+    BehaviorId::Searching,
+    BehaviorId::Begging,
+    BehaviorId::Knockback,
+    BehaviorId::Tumbling,
+    BehaviorId::FlipFacing,
+    BehaviorId::Talking,
+];
+
 /// Current behavior, cycle index, and RNG. Search timer lives here so
 /// searching does not need its own type.
 pub struct BehaviorManager {
+    kind: FigureKind,
     current: BehaviorId,
     index: usize,
     rng: Rng32,
@@ -118,10 +177,22 @@ pub struct BehaviorManager {
 
 impl BehaviorManager {
     pub fn new() -> Self {
+        Self::for_kind(FigureKind::Stickman)
+    }
+
+    pub fn dog() -> Self {
+        Self::for_kind(FigureKind::Dog)
+    }
+
+    fn for_kind(kind: FigureKind) -> Self {
         let mut this = Self {
+            kind,
             current: BehaviorId::Walking,
             index: 0,
-            rng: Rng32::new(0xA5A5_5A5A),
+            rng: Rng32::new(match kind {
+                FigureKind::Stickman => 0xA5A5_5A5A,
+                FigureKind::Dog => 0xD0D0_D0D0,
+            }),
             timer_ms: 0,
             switch_remain_ms: AUTO_SWITCH_MAX_MS,
             chain: None,
@@ -132,8 +203,26 @@ impl BehaviorManager {
         this
     }
 
+    pub fn kind(&self) -> FigureKind {
+        self.kind
+    }
+
     pub fn current(&self) -> BehaviorId {
         self.current
+    }
+
+    fn order(&self) -> &'static [BehaviorId] {
+        match self.kind {
+            FigureKind::Stickman => BEHAVIOR_ORDER,
+            FigureKind::Dog => DOG_ORDER,
+        }
+    }
+
+    fn lines(&self) -> &'static [&'static str] {
+        match self.kind {
+            FigureKind::Stickman => STICKMAN_LINES,
+            FigureKind::Dog => DOG_LINES,
+        }
     }
 
     pub fn is_talking(&self) -> bool {
@@ -165,7 +254,8 @@ impl BehaviorManager {
         self.timer_ms = 0;
         if id == BehaviorId::Talking {
             self.bubble_left = self.rng.next_u32() & 1 == 1;
-            self.phrase = dialog::pick_line(&mut self.rng, STICKMAN_LINES);
+            let lines = self.lines();
+            self.phrase = dialog::pick_line(&mut self.rng, lines);
         }
         if id == BehaviorId::FlipFacing {
             // Turn around: reverse any travel vector, then face along it.
@@ -176,13 +266,13 @@ impl BehaviorManager {
                 actor.sync_facing();
             }
         }
-        actor.play(id.clip());
+        actor.play(id.clip_for(self.kind));
         apply_loco_vector(id.loco(), actor);
         self.roll_auto_switch();
     }
 
-    fn index_of(id: BehaviorId) -> usize {
-        BEHAVIOR_ORDER.iter().position(|&b| b == id).unwrap_or(0)
+    fn index_of(&self, id: BehaviorId) -> usize {
+        self.order().iter().position(|&b| b == id).unwrap_or(0)
     }
 
     fn roll_auto_switch(&mut self) {
@@ -192,8 +282,9 @@ impl BehaviorManager {
 
     pub fn cycle_next(&mut self, actor: &mut Actor) {
         self.chain = None;
-        let index = (self.index + 1) % BEHAVIOR_ORDER.len();
-        self.switch(actor, BEHAVIOR_ORDER[index], index);
+        let order = self.order();
+        let index = (self.index + 1) % order.len();
+        self.switch(actor, order[index], index);
     }
 
     /// Switch to a uniformly chosen behavior other than the current one.
@@ -203,13 +294,14 @@ impl BehaviorManager {
     pub fn cycle_random(&mut self, actor: &mut Actor, entropy: u32) {
         self.chain = None;
         self.rng.mix(entropy);
-        let n = BEHAVIOR_ORDER.len();
+        let order = self.order();
+        let n = order.len();
         if n <= 1 {
             return;
         }
         let skip = 1 + (self.rng.next_u32() as usize % (n - 1));
         let index = (self.index + skip) % n;
-        self.switch(actor, BEHAVIOR_ORDER[index], index);
+        self.switch(actor, order[index], index);
     }
 
     /// Empty-space tap: 15% [`BehaviorId::FlipFacing`], otherwise a uniform
@@ -217,7 +309,8 @@ impl BehaviorManager {
     pub fn cycle_empty_tap(&mut self, actor: &mut Actor, entropy: u32) {
         self.chain = None;
         self.rng.mix(entropy);
-        let n = BEHAVIOR_ORDER.len();
+        let order = self.order();
+        let n = order.len();
         if n <= 1 {
             return;
         }
@@ -226,12 +319,12 @@ impl BehaviorManager {
             self.switch(
                 actor,
                 BehaviorId::FlipFacing,
-                Self::index_of(BehaviorId::FlipFacing),
+                self.index_of(BehaviorId::FlipFacing),
             );
             return;
         }
         let mut eligible = 0usize;
-        for &id in BEHAVIOR_ORDER {
+        for &id in order {
             if id == self.current {
                 continue;
             }
@@ -246,7 +339,7 @@ impl BehaviorManager {
         }
         let pick = self.rng.next_u32() as usize % eligible;
         let mut i = 0usize;
-        for &id in BEHAVIOR_ORDER {
+        for &id in order {
             if id == self.current {
                 continue;
             }
@@ -254,7 +347,7 @@ impl BehaviorManager {
                 continue;
             }
             if i == pick {
-                self.switch(actor, id, Self::index_of(id));
+                self.switch(actor, id, self.index_of(id));
                 return;
             }
             i += 1;
@@ -272,12 +365,14 @@ impl BehaviorManager {
     ) -> bool {
         if event == Event::BehaviorFinished {
             if let Some(next) = self.take_chain_step() {
-                self.switch(actor, next, Self::index_of(next));
+                self.switch(actor, next, self.index_of(next));
                 return true;
             }
         }
         self.rng.mix(entropy);
-        let steps = self.rng.pick(stickman_weights(self.current, event, ctx));
+        let steps = self
+            .rng
+            .pick(figure_weights(self.kind, self.current, event, ctx));
         self.begin_chain(actor, steps);
         false
     }
@@ -298,7 +393,7 @@ impl BehaviorManager {
         let first = steps[0];
         let retrigger = matches!(first.loco(), Loco::Jump | Loco::JumpForward);
         if first != self.current || steps.len() > 1 || retrigger {
-            self.switch(actor, first, Self::index_of(first));
+            self.switch(actor, first, self.index_of(first));
         }
         self.chain = if steps.len() > 1 {
             Some((steps, 1))
@@ -372,6 +467,28 @@ fn apply_loco(loco: Loco, actor: &mut Actor, dt_ms: u32, timer_ms: &mut u32) -> 
 
 /// One table row: a short behavior sequence and its weight.
 pub type WeightedChain = (&'static [BehaviorId], u16);
+
+pub fn figure_weights(
+    kind: FigureKind,
+    id: BehaviorId,
+    event: Event,
+    ctx: EventCtx,
+) -> &'static [WeightedChain] {
+    match kind {
+        FigureKind::Stickman => stickman_weights(id, event, ctx),
+        FigureKind::Dog => dog_weights(id, event, ctx),
+    }
+}
+
+pub fn dog_weights(id: BehaviorId, event: Event, ctx: EventCtx) -> &'static [WeightedChain] {
+    if event == Event::Tap {
+        return DOG_TAP;
+    }
+    if id.is_sword() {
+        return STICKMAN_STAY_WALK;
+    }
+    stickman_weights(id, event, ctx)
+}
 
 pub fn stickman_weights(id: BehaviorId, event: Event, ctx: EventCtx) -> &'static [WeightedChain] {
     if event == Event::Collision
@@ -469,6 +586,21 @@ const STICKMAN_TAP: &[WeightedChain] = &[
     (TUMBLE, 4),
 ];
 
+const DOG_TAP: &[WeightedChain] = &[
+    (FLIP, 15),
+    (WALK, 10),
+    (IDLE, 9),
+    (TALK, 8),
+    (JUMP, 10),
+    (JUMP_FWD, 10),
+    (CROUCH, 8),
+    (CRAWL, 8),
+    (SEARCH, 8),
+    (BEG, 8),
+    (KNOCKBACK, 3),
+    (TUMBLE, 3),
+];
+
 const STICKMAN_STAY_WALK: &[WeightedChain] = &[(WALK, 1)];
 
 /// Walk off a lid: keep a grounded clip; jump locos would restart a hop in air.
@@ -489,7 +621,7 @@ mod tests {
             mgr.cycle_random(&mut actor, i as u32);
             assert_ne!(mgr.index, prev);
             assert!(mgr.index < n);
-            assert_eq!(actor.clip, BEHAVIOR_ORDER[mgr.index].clip());
+            assert_eq!(actor.clip, BEHAVIOR_ORDER[mgr.index].clip_for(mgr.kind));
         }
     }
 
@@ -516,7 +648,7 @@ mod tests {
             let prev = mgr.index;
             mgr.cycle_empty_tap(&mut actor, i as u32);
             assert_ne!(mgr.index, prev);
-            assert_eq!(actor.clip, BEHAVIOR_ORDER[mgr.index].clip());
+            assert_eq!(actor.clip, BEHAVIOR_ORDER[mgr.index].clip_for(mgr.kind));
         }
     }
 
@@ -679,7 +811,7 @@ mod tests {
         mgr.switch(
             &mut actor,
             BehaviorId::JumpForward,
-            BehaviorManager::index_of(BehaviorId::JumpForward),
+            mgr.index_of(BehaviorId::JumpForward),
         );
         assert_eq!(actor.vy, -collision::jump_speed(JUMP_FORWARD_RISE));
         assert_eq!(actor.vx, actor.clip_vx());
@@ -699,7 +831,7 @@ mod tests {
         mgr.switch(
             &mut actor,
             BehaviorId::JumpForward,
-            BehaviorManager::index_of(BehaviorId::JumpForward),
+            mgr.index_of(BehaviorId::JumpForward),
         );
         let period = library::clip(ClipId::JumpForward).duration_ms as u32;
         actor.integrate(period);
@@ -715,7 +847,7 @@ mod tests {
         mgr.switch(
             &mut actor,
             BehaviorId::Jumping,
-            BehaviorManager::index_of(BehaviorId::Jumping),
+            mgr.index_of(BehaviorId::Jumping),
         );
         let period = library::clip(ClipId::Jump).duration_ms as u32;
         mgr.update(period as u64, &mut actor);
@@ -744,7 +876,7 @@ mod tests {
         mgr.switch(
             &mut actor,
             BehaviorId::Crawling,
-            BehaviorManager::index_of(BehaviorId::Crawling),
+            mgr.index_of(BehaviorId::Crawling),
         );
         let period = library::clip(ClipId::Crawl).duration_ms as u32;
         let vx = actor.vx;
@@ -787,12 +919,62 @@ mod tests {
         mgr.switch(
             &mut actor,
             BehaviorId::Talking,
-            BehaviorManager::index_of(BehaviorId::Talking),
+            mgr.index_of(BehaviorId::Talking),
         );
         let line = mgr.talk_phrase().expect("talking should pick a line");
         assert!(STICKMAN_LINES.contains(&line));
         assert!(mgr.is_talking());
         assert_eq!(actor.clip, ClipId::Idle);
         assert_eq!(actor.vx, 0);
+    }
+
+    #[test]
+    fn dog_order_has_no_swords() {
+        assert!(DOG_ORDER.iter().all(|id| !id.is_sword()));
+        assert!(!DOG_ORDER.contains(&BehaviorId::SwordStance));
+        assert_eq!(
+            BehaviorId::Walking.clip_for(FigureKind::Dog),
+            ClipId::DogWalk
+        );
+        assert_eq!(
+            BehaviorId::Talking.clip_for(FigureKind::Dog),
+            ClipId::DogIdle
+        );
+        assert_eq!(
+            BehaviorId::Searching.clip_for(FigureKind::Dog),
+            ClipId::DogCrouch
+        );
+    }
+
+    #[test]
+    fn dog_talking_picks_a_dog_line() {
+        let mut mgr = BehaviorManager::dog();
+        let mut actor = Actor::default();
+        mgr.switch(
+            &mut actor,
+            BehaviorId::Talking,
+            mgr.index_of(BehaviorId::Talking),
+        );
+        let line = mgr.talk_phrase().expect("talking should pick a line");
+        assert!(DOG_LINES.contains(&line));
+        assert_eq!(actor.clip, ClipId::DogIdle);
+        assert_eq!(actor.vx, 0);
+    }
+
+    #[test]
+    fn dog_cycle_never_plays_a_sword_clip() {
+        let mut mgr = BehaviorManager::dog();
+        let mut actor = Actor::default();
+        actor.play(ClipId::DogWalk);
+        let n = DOG_ORDER.len();
+        for i in 0..n * 8 {
+            mgr.cycle_random(&mut actor, i as u32);
+            assert!(!mgr.current().is_sword());
+            assert_eq!(actor.clip, mgr.current().clip_for(FigureKind::Dog));
+            assert!(core::ptr::eq(
+                library::clip(actor.clip).species,
+                &library::DOG
+            ));
+        }
     }
 }

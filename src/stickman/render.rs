@@ -3,10 +3,10 @@
 use crate::stickman::geometry::{self, rotate_point_cw, Segment, MAX_FLOOR_SEGS};
 use crate::stickman::ir::{BoneKind, PoseScratch};
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::geometry::Point;
+use embedded_graphics::geometry::{Point, Size};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle};
+use embedded_graphics::primitives::{Circle, Ellipse, Line, PrimitiveStyle, Triangle};
 
 const WHITE: Rgb565 = Rgb565::WHITE;
 const BLACK: Rgb565 = Rgb565::BLACK;
@@ -53,6 +53,22 @@ where
                 let stroke = if diameter >= 8 { HEAD_STROKE } else { 1 };
                 Circle::with_center(pose.tip[i], diameter)
                     .into_styled(PrimitiveStyle::with_stroke(WHITE, stroke))
+                    .draw(display)?;
+            }
+            BoneKind::Ellipse { width, height } => {
+                let stroke = if width.max(height) >= 8 {
+                    HEAD_STROKE
+                } else {
+                    1
+                };
+                Ellipse::with_center(pose.tip[i], Size::new(width, height))
+                    .into_styled(PrimitiveStyle::with_stroke(WHITE, stroke))
+                    .draw(display)?;
+            }
+            BoneKind::Triangle { base } => {
+                let pts = geometry::triangle_points(pose.origin[i], pose.tip[i], base);
+                Triangle::new(pts[0], pts[1], pts[2])
+                    .into_styled(PrimitiveStyle::with_stroke(WHITE, 1))
                     .draw(display)?;
             }
             BoneKind::Rect { width, height } => {

@@ -9,7 +9,7 @@ use esp_hal::{
     delay::Delay,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     i2c::master::{Config as I2cConfig, I2c},
-    peripherals::Peripherals,
+    peripherals::{GPIO0, GPIO2, GPIO3, GPIO5, GPIO6, GPIO7, GPIO17, GPIO18, GPIO38, GPIO47, GPIO48, I2C0, SPI2},
     spi::{
         master::{Config as SpiConfig, Spi},
         Mode,
@@ -26,6 +26,23 @@ pub const DISPLAY_HEIGHT: u32 = crate::DISPLAY_HEIGHT;
 const FRAME_MS: u64 = 33;
 const MAX_DELTA_MS: u64 = 100;
 
+/// Display / input pins kept on core 0 (Wi-Fi/USB take the rest in `main`).
+pub struct AppPins {
+    pub gpio0: GPIO0<'static>,
+    pub gpio2: GPIO2<'static>,
+    pub gpio3: GPIO3<'static>,
+    pub gpio5: GPIO5<'static>,
+    pub gpio6: GPIO6<'static>,
+    pub gpio7: GPIO7<'static>,
+    pub gpio17: GPIO17<'static>,
+    pub gpio18: GPIO18<'static>,
+    pub gpio38: GPIO38<'static>,
+    pub gpio47: GPIO47<'static>,
+    pub gpio48: GPIO48<'static>,
+    pub spi2: SPI2<'static>,
+    pub i2c0: I2C0<'static>,
+}
+
 pub struct App {
     display: RM67162<'static, Output<'static>>,
     game: Game,
@@ -36,25 +53,25 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(peripherals: Peripherals) -> Self {
+    pub fn new(pins: AppPins) -> Self {
         let mut delay = Delay::new();
 
         // Newer board revisions require GPIO38 high before the panel will light.
-        let display_enable = Output::new(peripherals.GPIO38, Level::High, OutputConfig::default());
+        let display_enable = Output::new(pins.gpio38, Level::High, OutputConfig::default());
 
-        let sclk = peripherals.GPIO47;
-        let rst = peripherals.GPIO17;
-        let cs = peripherals.GPIO6;
-        let d0 = peripherals.GPIO18;
-        let d1 = peripherals.GPIO7;
-        let d2 = peripherals.GPIO48;
-        let d3 = peripherals.GPIO5;
+        let sclk = pins.gpio47;
+        let rst = pins.gpio17;
+        let cs = pins.gpio6;
+        let d0 = pins.gpio18;
+        let d1 = pins.gpio7;
+        let d2 = pins.gpio48;
+        let d3 = pins.gpio5;
 
         let cs = Output::new(cs, Level::High, OutputConfig::default());
         let mut rst = Output::new(rst, Level::High, OutputConfig::default());
 
         let spi = Spi::new(
-            peripherals.SPI2,
+            pins.spi2,
             SpiConfig::default()
                 .with_frequency(Rate::from_mhz(75))
                 .with_mode(Mode::_0),
@@ -83,11 +100,11 @@ impl App {
         // CST816 on LilyGo 1.91" AMOLED Touch: SDA=GPIO3, SCL=GPIO2, IRQ=GPIO21.
         // Keep the driver even if the first read fails — the chip often starts asleep.
         let touch = match I2c::new(
-            peripherals.I2C0,
+            pins.i2c0,
             I2cConfig::default().with_frequency(Rate::from_khz(400)),
         ) {
             Ok(i2c) => {
-                let i2c = i2c.with_sda(peripherals.GPIO3).with_scl(peripherals.GPIO2);
+                let i2c = i2c.with_sda(pins.gpio3).with_scl(pins.gpio2);
                 let mut touch = Cst816Touch::new(i2c);
                 match touch.disable_auto_sleep() {
                     Ok(()) => esp_println::println!("Touch: auto-sleep disabled"),
@@ -114,7 +131,7 @@ impl App {
         // BOOT button (GPIO0) as a secondary cycle input.
         // GPIO21 is the CST816 IRQ — do not claim it as a GPIO button on touch boards.
         let button = Some(Button::new(Input::new(
-            peripherals.GPIO0,
+            pins.gpio0,
             InputConfig::default().with_pull(Pull::Up),
         )));
 
@@ -127,7 +144,7 @@ impl App {
         }
     }
 
-    pub fn run(&mut self) -> ! {
+    pub async fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
             "Tap an entity to roll its table; empty tap picks a random stickman behavior. BOOT cycles stickman behaviors. Looping clips roll a finished table after each cycle."
@@ -156,11 +173,16 @@ impl App {
                 }
             }
 
+            while let Some(cmd) = crate::net::try_recv_config() {
+                self.game.apply_config(cmd);
+            }
+
             self.game.update(delta_ms);
             self.game.draw(&mut self.display).unwrap();
 
-            // Pace only when a frame finishes faster than the target.
-            while frame_start.elapsed() < frame_duration {}
+            // Yield to the core-0 RTOS/radio tasks instead of a busy-wait.
+            let _ = frame_duration;
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(FRAME_MS)).await;
         }
     }
 }

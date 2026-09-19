@@ -185,6 +185,42 @@ pub fn sin_cos_deg_milli(deg: i32) -> (i32, i32) {
     (s, c)
 }
 
+/// Isosceles triangle: `origin` is the base midpoint, `tip` is the apex.
+pub fn triangle_points(origin: Point, tip: Point, base: u32) -> [Point; 3] {
+    let dx = tip.x - origin.x;
+    let dy = tip.y - origin.y;
+    let hw = base as i32 / 2;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq == 0 {
+        return [
+            Point::new(origin.x - hw, origin.y),
+            Point::new(origin.x + hw, origin.y),
+            tip,
+        ];
+    }
+    let len = isqrt(len_sq).max(1);
+    let px = -dy * hw / len;
+    let py = dx * hw / len;
+    [
+        Point::new(origin.x + px, origin.y + py),
+        Point::new(origin.x - px, origin.y - py),
+        tip,
+    ]
+}
+
+fn isqrt(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
 /// Axis-aligned rect corners (bottom-center origin), then optional spin about
 /// the geometric center. Order: top-left, top-right, bottom-right, bottom-left.
 pub fn rect_corners(origin: Point, width: u32, height: u32, spin_deg: i32) -> [Point; 4] {
@@ -300,6 +336,18 @@ mod tests {
         assert_eq!(atan2_deg(100, 100), 45);
         assert_eq!(atan2_deg(-100, 100), -45);
         assert_eq!(atan2_deg(-100, -100), -135);
+    }
+
+    #[test]
+    fn triangle_points_are_isosceles_about_the_bone() {
+        let origin = Point::new(10, 20);
+        let tip = Point::new(10, 10);
+        let pts = triangle_points(origin, tip, 8);
+        assert_eq!(pts[2], tip);
+        assert_eq!((pts[0].x + pts[1].x) / 2, origin.x);
+        assert_eq!(pts[0].y, origin.y);
+        assert_eq!(pts[1].y, origin.y);
+        assert_eq!((pts[1].x - pts[0].x).abs(), 8);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! union of the previous/new pose bounds into a RAM buffer and push it with
 //! a single [`DrawTarget::fill_contiguous`] (one window, streamed pixels).
 
-use crate::assets::Rgb565Image;
+use crate::assets::Backdrop;
 use crate::stickman::geometry::{self, Segment, MAX_FLOOR_SEGS};
 use crate::stickman::ir::PoseScratch;
 use crate::stickman::render;
@@ -128,20 +128,15 @@ fn union_rects(a: Rectangle, b: Rectangle) -> Rectangle {
 }
 
 /// Paint layer 0 once (backdrop + floor). Later frames dirty-restore via tiles.
-pub fn draw_background<D>(
-    display: &mut D,
-    background: Option<&Rgb565Image<'_>>,
-) -> Result<(), D::Error>
+pub fn draw_background<D>(display: &mut D, background: Backdrop) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    if let Some(img) = background {
-        img.draw(display, Point::zero())?;
-    }
+    background.fill(display)?;
     render::draw_floor(display)
 }
 
-fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Option<&Rgb565Image<'_>>) {
+fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Backdrop) {
     let w = width as usize;
     let h = buf.len() / w;
     let mut segs = [Segment::ZERO; MAX_FLOOR_SEGS];
@@ -151,10 +146,7 @@ fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Option<&Rgb5
         let y = area.top_left.y + row as i32;
         for col in 0..w {
             let x = area.top_left.x + col as i32;
-            let mut color = match bg {
-                Some(img) => img.pixel(x, y).unwrap_or(Rgb565::BLACK),
-                None => Rgb565::BLACK,
-            };
+            let mut color = bg.pixel(x, y);
             if y == geometry::floor_y_at_in(floor, x) {
                 color = Rgb565::WHITE;
             }
@@ -170,7 +162,7 @@ pub fn blit_composed_area<D>(
     area: Rectangle,
     pose: &PoseScratch,
     overlays: &[&PoseScratch],
-    background: Option<&Rgb565Image<'_>>,
+    background: Backdrop,
     draw_figure: bool,
 ) -> Result<(), D::Error>
 where
@@ -211,7 +203,7 @@ pub fn present_actor_frame<D>(
     pose: &PoseScratch,
     new_rect: Rectangle,
     overlays: &[&PoseScratch],
-    background: Option<&Rgb565Image<'_>>,
+    background: Backdrop,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
@@ -236,8 +228,11 @@ where
             blit_composed_area(
                 display, dirty_buf, prev_rect, pose, overlays, background, false,
             )?;
-        } else if let Some(img) = background {
-            img.blit_rect(display, prev_rect)?;
+        } else {
+            match background {
+                Backdrop::Image(img) => img.blit_rect(display, prev_rect)?,
+                Backdrop::Color(c) => display.fill_solid(&prev_rect, c)?,
+            }
         }
     }
     if new_rect.size.width <= DIRTY_MAX_W && new_rect.size.height <= DIRTY_MAX_H {

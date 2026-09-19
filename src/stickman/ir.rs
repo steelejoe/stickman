@@ -29,6 +29,16 @@ pub enum ClipId {
     BoxSlide,
     BoxRoll,
     BoxShudder,
+    DogWalk,
+    DogIdle,
+    DogJump,
+    DogJumpForward,
+    DogCrouch,
+    DogCrawl,
+    DogBeg,
+    DogKnockback,
+    DogTumble,
+    DogFlip,
 }
 
 /// Compile-time cap for one species. Scratch is sized to this, not clip count.
@@ -43,6 +53,10 @@ pub enum BoneKind {
     Line,
     /// Circle centered on this tip (`diameter` matches embedded-graphics).
     Circle { diameter: u32 },
+    /// Axis-aligned oval centered on this tip (dog snout / head loop).
+    Ellipse { width: u32, height: u32 },
+    /// Isosceles triangle: origin is the base center, tip is the apex.
+    Triangle { base: u32 },
     /// Axis-aligned box. Bottom-center is this bone's origin; extends up (−Y).
     Rect { width: u32, height: u32 },
 }
@@ -266,7 +280,7 @@ pub struct PoseScratch {
     pub visible: [bool; MAX_BONES],
     /// Signed body spin (degrees) after facing. Used to rotate box rects.
     pub spin_deg: i32,
-    /// Optional speech bubble (stickman talking pose only).
+    /// Optional speech bubble (talking pose).
     pub bubble: Option<crate::stickman::bubble::Bubble>,
 }
 

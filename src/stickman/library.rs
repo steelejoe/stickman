@@ -35,6 +35,15 @@ pub const FOREARM_B: u8 = 12;
 pub const FIST: u8 = 13;
 pub const SWORD: u8 = 14;
 pub const GUARD: u8 = 15;
+/// Dog tail (same slot as [`FIST`]; plant-feet still ignores index ≥ 13).
+pub const TAIL: u8 = 13;
+pub const EAR_A: u8 = 14;
+pub const EAR_B: u8 = 15;
+
+/// Horizontal torso on the dog rig. ~33% shorter than the long sketch body.
+pub const DOG_SPINE: i16 = 24;
+/// Ground → rear hip. Front legs hang the same distance from the shoulder.
+pub const DOG_HIP: i16 = 20;
 
 const LINE: BoneKind = BoneKind::Line;
 const JOINT: BoneKind = BoneKind::Joint;
@@ -170,6 +179,127 @@ pub static BOX: Species = Species {
         },
         visible: true,
     }],
+};
+
+/// Side-profile quadruped: line limbs, ellipse snout, triangle ears.
+pub static DOG: Species = Species {
+    bones: &[
+        Bone {
+            parent: -1,
+            length: 0,
+            rest_deg: 0,
+            kind: JOINT,
+            visible: false,
+        },
+        Bone {
+            parent: 0,
+            length: DOG_HIP,
+            rest_deg: 180,
+            kind: JOINT,
+            visible: false,
+        },
+        Bone {
+            parent: 1,
+            length: DOG_SPINE,
+            rest_deg: 90,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 2,
+            length: 5,
+            rest_deg: 155,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 3,
+            length: 6,
+            rest_deg: 135,
+            kind: BoneKind::Ellipse {
+                width: 20,
+                height: 9,
+            },
+            visible: true,
+        },
+        Bone {
+            parent: 1,
+            length: 10,
+            rest_deg: 12,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 5,
+            length: 10,
+            rest_deg: -12,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 1,
+            length: 10,
+            rest_deg: -14,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 7,
+            length: 10,
+            rest_deg: -16,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 2,
+            length: 10,
+            rest_deg: 10,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 9,
+            length: 10,
+            rest_deg: -10,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 2,
+            length: 10,
+            rest_deg: -16,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 11,
+            length: 10,
+            rest_deg: -14,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 1,
+            length: 12,
+            rest_deg: 220,
+            kind: LINE,
+            visible: true,
+        },
+        Bone {
+            parent: 4,
+            length: 11,
+            rest_deg: 205,
+            kind: BoneKind::Triangle { base: 6 },
+            visible: true,
+        },
+        Bone {
+            parent: 4,
+            length: 11,
+            rest_deg: 155,
+            kind: BoneKind::Triangle { base: 6 },
+            visible: true,
+        },
+    ],
 };
 
 macro_rules! track {
@@ -755,6 +885,310 @@ static TUMBLE: Clip = Clip {
     ],
 };
 
+const DOG_HIP_CROUCH: Track = track!(HIP, Len, (0, 11, Hold));
+const DOG_SPINE_90: Track = track!(SPINE, Rot, (0, 90, Hold));
+const DOG_SPINE_80: Track = track!(SPINE, Rot, (0, 80, Hold));
+const DOG_SPINE_140: Track = track!(SPINE, Rot, (0, 140, Hold));
+const DOG_NECK_155: Track = track!(NECK, Rot, (0, 155, Hold));
+const DOG_NECK_148: Track = track!(NECK, Rot, (0, 148, Hold));
+const DOG_HEAD_135: Track = track!(HEAD, Rot, (0, 135, Hold));
+const DOG_HEAD_128: Track = track!(HEAD, Rot, (0, 128, Hold));
+
+static DOG_IDLE: Clip = Clip {
+    species: &DOG,
+    duration_ms: 1,
+    loop_mode: LoopMode::Once,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: &[],
+};
+
+/// Trot: diagonal pairs (back A + front B, back B + front A).
+static DOG_WALK: Clip = Clip {
+    species: &DOG,
+    duration_ms: WALK_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: TRAVEL_DX,
+    spin: Spin::None,
+    tracks: &[
+        track!(
+            THIGH_A,
+            Rot,
+            (0, 8, Lerp),
+            (278, 32, Lerp),
+            (556, 8, Lerp),
+            (833, -22, Lerp)
+        ),
+        track!(
+            SHIN_A,
+            Rot,
+            (0, -12, Lerp),
+            (278, 8, Lerp),
+            (556, -16, Lerp),
+            (833, -70, Lerp)
+        ),
+        track!(
+            THIGH_B,
+            Rot,
+            (0, -6, Lerp),
+            (278, -22, Lerp),
+            (556, -6, Lerp),
+            (833, 28, Lerp)
+        ),
+        track!(
+            SHIN_B,
+            Rot,
+            (0, -16, Lerp),
+            (278, -70, Lerp),
+            (556, -12, Lerp),
+            (833, 8, Lerp)
+        ),
+        track!(
+            ARM_A,
+            Rot,
+            (0, -8, Lerp),
+            (278, -20, Lerp),
+            (556, -8, Lerp),
+            (833, 28, Lerp)
+        ),
+        track!(
+            FOREARM_A,
+            Rot,
+            (0, -14, Lerp),
+            (278, -68, Lerp),
+            (556, -12, Lerp),
+            (833, 6, Lerp)
+        ),
+        track!(
+            ARM_B,
+            Rot,
+            (0, 6, Lerp),
+            (278, 28, Lerp),
+            (556, 6, Lerp),
+            (833, -20, Lerp)
+        ),
+        track!(
+            FOREARM_B,
+            Rot,
+            (0, -10, Lerp),
+            (278, 6, Lerp),
+            (556, -16, Lerp),
+            (833, -68, Lerp)
+        ),
+        track!(
+            TAIL,
+            Rot,
+            (0, 210, Lerp),
+            (278, 235, Lerp),
+            (556, 210, Lerp),
+            (833, 235, Lerp)
+        ),
+    ],
+};
+
+const DOG_JUMP_TRACKS: &[Track] = &[
+    track!(THIGH_A, Rot, (0, 28, Hold)),
+    track!(SHIN_A, Rot, (0, -70, Hold)),
+    track!(THIGH_B, Rot, (0, 18, Hold)),
+    track!(SHIN_B, Rot, (0, -78, Hold)),
+    track!(ARM_A, Rot, (0, 24, Hold)),
+    track!(FOREARM_A, Rot, (0, -66, Hold)),
+    track!(ARM_B, Rot, (0, 16, Hold)),
+    track!(FOREARM_B, Rot, (0, -74, Hold)),
+    track!(EAR_A, Rot, (0, 110, Hold)),
+    track!(EAR_B, Rot, (0, 95, Hold)),
+    track!(TAIL, Rot, (0, 250, Hold)),
+];
+
+static DOG_JUMP: Clip = Clip {
+    species: &DOG,
+    duration_ms: JUMP_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: DOG_JUMP_TRACKS,
+};
+
+static DOG_JUMP_FORWARD: Clip = Clip {
+    species: &DOG,
+    duration_ms: JUMP_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: TRAVEL_DX,
+    spin: Spin::None,
+    tracks: DOG_JUMP_TRACKS,
+};
+
+static DOG_CROUCH: Clip = Clip {
+    species: &DOG,
+    duration_ms: 1,
+    loop_mode: LoopMode::Once,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: &[
+        DOG_HIP_CROUCH,
+        DOG_SPINE_80,
+        DOG_NECK_148,
+        DOG_HEAD_128,
+        track!(THIGH_A, Rot, (0, 36, Hold)),
+        track!(SHIN_A, Rot, (0, -78, Hold)),
+        track!(THIGH_B, Rot, (0, 22, Hold)),
+        track!(SHIN_B, Rot, (0, -88, Hold)),
+        track!(ARM_A, Rot, (0, 32, Hold)),
+        track!(FOREARM_A, Rot, (0, -74, Hold)),
+        track!(ARM_B, Rot, (0, 18, Hold)),
+        track!(FOREARM_B, Rot, (0, -82, Hold)),
+    ],
+};
+
+static DOG_CRAWL: Clip = Clip {
+    species: &DOG,
+    duration_ms: WALK_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: CRAWL_DX,
+    spin: Spin::None,
+    tracks: &[
+        DOG_HIP_CROUCH,
+        DOG_SPINE_80,
+        DOG_NECK_148,
+        DOG_HEAD_128,
+        track!(
+            THIGH_A,
+            Rot,
+            (0, 22, Lerp),
+            (278, 40, Lerp),
+            (556, 50, Lerp),
+            (833, 40, Lerp)
+        ),
+        track!(
+            SHIN_A,
+            Rot,
+            (0, -88, Lerp),
+            (278, -80, Lerp),
+            (556, -72, Lerp),
+            (833, -80, Lerp)
+        ),
+        track!(
+            THIGH_B,
+            Rot,
+            (0, 50, Lerp),
+            (278, 40, Lerp),
+            (556, 22, Lerp),
+            (833, 40, Lerp)
+        ),
+        track!(
+            SHIN_B,
+            Rot,
+            (0, -72, Lerp),
+            (278, -80, Lerp),
+            (556, -88, Lerp),
+            (833, -80, Lerp)
+        ),
+        track!(
+            ARM_A,
+            Rot,
+            (0, 48, Lerp),
+            (278, 36, Lerp),
+            (556, 20, Lerp),
+            (833, 36, Lerp)
+        ),
+        track!(
+            FOREARM_A,
+            Rot,
+            (0, -70, Lerp),
+            (278, -76, Lerp),
+            (556, -82, Lerp),
+            (833, -76, Lerp)
+        ),
+        track!(
+            ARM_B,
+            Rot,
+            (0, 20, Lerp),
+            (278, 36, Lerp),
+            (556, 48, Lerp),
+            (833, 36, Lerp)
+        ),
+        track!(
+            FOREARM_B,
+            Rot,
+            (0, -82, Lerp),
+            (278, -76, Lerp),
+            (556, -70, Lerp),
+            (833, -76, Lerp)
+        ),
+    ],
+};
+
+static DOG_BEG: Clip = Clip {
+    species: &DOG,
+    duration_ms: 1,
+    loop_mode: LoopMode::Once,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: &[
+        DOG_HIP_CROUCH,
+        DOG_SPINE_140,
+        DOG_NECK_155,
+        DOG_HEAD_135,
+        track!(THIGH_A, Rot, (0, 40, Hold)),
+        track!(SHIN_A, Rot, (0, -86, Hold)),
+        track!(THIGH_B, Rot, (0, 28, Hold)),
+        track!(SHIN_B, Rot, (0, -96, Hold)),
+        track!(ARM_A, Rot, (0, 70, Hold)),
+        track!(FOREARM_A, Rot, (0, 120, Hold)),
+        track!(ARM_B, Rot, (0, 62, Hold)),
+        track!(FOREARM_B, Rot, (0, 118, Hold)),
+    ],
+};
+
+static DOG_KNOCKBACK: Clip = Clip {
+    species: &DOG,
+    duration_ms: WALK_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: TRAVEL_DX,
+    spin: Spin::Knockback,
+    tracks: &[
+        track!(THIGH_A, Rot, (0, 40, Hold)),
+        track!(SHIN_A, Rot, (0, -40, Hold)),
+        track!(THIGH_B, Rot, (0, -28, Hold)),
+        track!(SHIN_B, Rot, (0, -90, Hold)),
+        track!(ARM_A, Rot, (0, 50, Hold)),
+        track!(FOREARM_A, Rot, (0, 70, Hold)),
+        track!(ARM_B, Rot, (0, -40, Hold)),
+        track!(FOREARM_B, Rot, (0, -30, Hold)),
+        track!(ROOT, Spin, (0, 0, Lerp), (WALK_MS, 360, Lerp)),
+    ],
+};
+
+static DOG_TUMBLE: Clip = Clip {
+    species: &DOG,
+    duration_ms: WALK_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: TRAVEL_DX,
+    spin: Spin::Tumble,
+    tracks: &[
+        DOG_HIP_CROUCH,
+        DOG_SPINE_90,
+        track!(THIGH_A, Rot, (0, 50, Hold)),
+        track!(SHIN_A, Rot, (0, -20, Hold)),
+        track!(THIGH_B, Rot, (0, -20, Hold)),
+        track!(SHIN_B, Rot, (0, -100, Hold)),
+        track!(ARM_A, Rot, (0, 44, Hold)),
+        track!(FOREARM_A, Rot, (0, 70, Hold)),
+        track!(ARM_B, Rot, (0, 30, Hold)),
+        track!(FOREARM_B, Rot, (0, 60, Hold)),
+        track!(ROOT, Spin, (0, 0, Lerp), (WALK_MS, 360, Lerp)),
+    ],
+};
+
+static DOG_FLIP: Clip = Clip {
+    species: &DOG,
+    duration_ms: FLIP_MS,
+    loop_mode: LoopMode::Loop,
+    travel_dx: 0,
+    spin: Spin::None,
+    tracks: &[track!(ROOT, Tx, (0, 0, Hold))],
+};
+
 /// Look up clip data. Searching reuses the crouch pose.
 pub fn clip(id: ClipId) -> &'static Clip {
     match id {
@@ -776,6 +1210,16 @@ pub fn clip(id: ClipId) -> &'static Clip {
         ClipId::BoxSlide => &BOX_SLIDE,
         ClipId::BoxRoll => &BOX_ROLL,
         ClipId::BoxShudder => &BOX_SHUDDER,
+        ClipId::DogWalk => &DOG_WALK,
+        ClipId::DogIdle => &DOG_IDLE,
+        ClipId::DogJump => &DOG_JUMP,
+        ClipId::DogJumpForward => &DOG_JUMP_FORWARD,
+        ClipId::DogCrouch => &DOG_CROUCH,
+        ClipId::DogCrawl => &DOG_CRAWL,
+        ClipId::DogBeg => &DOG_BEG,
+        ClipId::DogKnockback => &DOG_KNOCKBACK,
+        ClipId::DogTumble => &DOG_TUMBLE,
+        ClipId::DogFlip => &DOG_FLIP,
     }
 }
 
@@ -825,5 +1269,30 @@ mod tests {
                 height: BOX_HEIGHT,
             }
         );
+    }
+
+    #[test]
+    fn dog_is_a_compact_quadruped() {
+        assert!(DOG.bones.len() <= crate::stickman::ir::MAX_BONES);
+        assert_eq!(DOG.bones.len(), 16);
+        assert_eq!(DOG.bones[SPINE as usize].length, DOG_SPINE);
+        assert!(
+            DOG_SPINE * 3 <= 36 * 2,
+            "spine should be ~33% shorter than 36"
+        );
+        assert!(matches!(
+            DOG.bones[HEAD as usize].kind,
+            BoneKind::Ellipse { .. }
+        ));
+        assert!(matches!(
+            DOG.bones[EAR_A as usize].kind,
+            BoneKind::Triangle { .. }
+        ));
+        assert_eq!(DOG_WALK.species as *const _, &DOG as *const _);
+        assert_eq!(DOG_IDLE.loop_mode, LoopMode::Once);
+        assert_eq!(DOG_WALK.travel_dx, TRAVEL_DX);
+        assert_eq!(DOG_JUMP.travel_dx, 0);
+        assert_eq!(DOG_JUMP_FORWARD.travel_dx, TRAVEL_DX);
+        assert_eq!(DOG_CRAWL.travel_dx, CRAWL_DX);
     }
 }

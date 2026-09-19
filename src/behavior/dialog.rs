@@ -16,6 +16,12 @@ pub const BOX_LINES: &[&str] = &[
     "stuck?",
 ];
 
+/// Dog talk bank. Silly, a bit more animal than the stickman.
+pub const DOG_LINES: &[&str] = &[
+    "Woof!", "Arf", "Bark", "Pant", "Ouch!", "Hey!", "Snack?", "Zoom!", "Hrm", "Boop", "Huh?",
+    "Yip!", "Good?", "Ball?", "Eep!", "Whine",
+];
+
 pub fn pick_line(rng: &mut Rng32, lines: &[&'static str]) -> &'static str {
     debug_assert!(!lines.is_empty());
     lines[rng.next_u32() as usize % lines.len()]
@@ -42,6 +48,17 @@ mod tests {
         assert!(BOX_LINES.contains(&"(fart)"));
         assert!(BOX_LINES.contains(&"Ouch!"));
         for line in BOX_LINES {
+            assert!(!line.is_empty());
+            assert!(line.len() <= 16, "{line}");
+        }
+    }
+
+    #[test]
+    fn dog_bank_is_short_and_silly() {
+        assert!(DOG_LINES.contains(&"Woof!"));
+        assert!(DOG_LINES.contains(&"Ouch!"));
+        assert!(DOG_LINES.len() >= 8);
+        for line in DOG_LINES {
             assert!(!line.is_empty());
             assert!(line.len() <= 16, "{line}");
         }

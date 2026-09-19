@@ -162,6 +162,15 @@ fn contact_lowest_y(out: &PoseScratch) -> Option<i32> {
                     let r = (diameter as i32 + 1) / 2;
                     lowest = lowest.max(out.tip[i].y + r);
                 }
+                BoneKind::Ellipse { width: _, height } => {
+                    let r = (height as i32 + 1) / 2;
+                    lowest = lowest.max(out.tip[i].y + r);
+                }
+                BoneKind::Triangle { base } => {
+                    for p in geometry::triangle_points(out.origin[i], out.tip[i], base) {
+                        lowest = lowest.max(p.y);
+                    }
+                }
                 BoneKind::Rect { width, height } => {
                     for p in geometry::rect_corners(out.origin[i], width, height, out.spin_deg) {
                         lowest = lowest.max(p.y);
@@ -292,6 +301,32 @@ fn visible_aabb(pose: &PoseScratch) -> Option<(i32, i32, i32, i32)> {
                     &mut max_y,
                     Point::new(c.x + r, c.y + r),
                 );
+            }
+            BoneKind::Ellipse { width, height } => {
+                let hw = (width as i32 + 1) / 2 + 1;
+                let hh = (height as i32 + 1) / 2 + 1;
+                let c = pose.tip[i];
+                include_point(
+                    &mut any,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    Point::new(c.x - hw, c.y - hh),
+                );
+                include_point(
+                    &mut any,
+                    &mut min_x,
+                    &mut min_y,
+                    &mut max_x,
+                    &mut max_y,
+                    Point::new(c.x + hw, c.y + hh),
+                );
+            }
+            BoneKind::Triangle { base } => {
+                for p in geometry::triangle_points(pose.origin[i], pose.tip[i], base) {
+                    include_point(&mut any, &mut min_x, &mut min_y, &mut max_x, &mut max_y, p);
+                }
             }
             BoneKind::Rect { width, height } => {
                 for p in geometry::rect_corners(pose.origin[i], width, height, pose.spin_deg) {
@@ -428,7 +463,7 @@ mod tests {
         }
     }
 
-    const ALL_CLIPS: [crate::stickman::ir::ClipId; 12] = [
+    const ALL_CLIPS: [crate::stickman::ir::ClipId; 21] = [
         crate::stickman::ir::ClipId::Walk,
         crate::stickman::ir::ClipId::Idle,
         crate::stickman::ir::ClipId::Jump,
@@ -441,6 +476,15 @@ mod tests {
         crate::stickman::ir::ClipId::SwordCrouchStab,
         crate::stickman::ir::ClipId::Knockback,
         crate::stickman::ir::ClipId::Tumble,
+        crate::stickman::ir::ClipId::DogWalk,
+        crate::stickman::ir::ClipId::DogIdle,
+        crate::stickman::ir::ClipId::DogJump,
+        crate::stickman::ir::ClipId::DogCrouch,
+        crate::stickman::ir::ClipId::DogCrawl,
+        crate::stickman::ir::ClipId::DogBeg,
+        crate::stickman::ir::ClipId::DogKnockback,
+        crate::stickman::ir::ClipId::DogTumble,
+        crate::stickman::ir::ClipId::DogJumpForward,
     ];
 
     fn sample_at(clip: crate::stickman::ir::ClipId, time_ms: u32) -> PoseScratch {
@@ -657,6 +701,49 @@ mod tests {
         assert!(
             blade.x >= sword_hit.top_left.x && blade.x <= max_x,
             "blade tip {blade:?} outside hitbox {sword_hit:?}"
+        );
+    }
+
+    #[test]
+    fn dog_idle_plants_on_root() {
+        let mut actor = Actor::default();
+        actor.play(crate::stickman::ir::ClipId::DogIdle);
+        actor.x = 100;
+        actor.y = 200;
+        let mut pose = PoseScratch::new();
+        sample(&actor, &mut pose);
+        let lowest = contact_lowest_y(&pose).expect("contact");
+        assert_eq!(lowest, 200);
+        assert!(matches!(
+            pose.species.unwrap().bones[library::HEAD as usize].kind,
+            crate::stickman::ir::BoneKind::Ellipse { .. }
+        ));
+        assert!(pose.tip[library::HEAD as usize].x > 100);
+    }
+
+    #[test]
+    fn dog_walk_is_a_diagonal_trot() {
+        let t_fwd = sample_at(crate::stickman::ir::ClipId::DogWalk, 278);
+        let t_opp = sample_at(crate::stickman::ir::ClipId::DogWalk, 833);
+        let back_a = library::THIGH_A as usize;
+        let back_b = library::THIGH_B as usize;
+        let front_a = library::ARM_A as usize;
+        let front_b = library::ARM_B as usize;
+        assert!(
+            t_fwd.tip[back_a].x > t_fwd.tip[back_b].x,
+            "back A forward at 25%"
+        );
+        assert!(
+            t_fwd.tip[front_b].x > t_fwd.tip[front_a].x,
+            "front B forward at 25%"
+        );
+        assert!(
+            t_opp.tip[back_b].x > t_opp.tip[back_a].x,
+            "back B forward at 75%"
+        );
+        assert!(
+            t_opp.tip[front_a].x > t_opp.tip[front_b].x,
+            "front A forward at 75%"
         );
     }
 }

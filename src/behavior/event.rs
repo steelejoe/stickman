@@ -27,6 +27,7 @@ pub struct EventCtx {
 }
 
 /// xorshift32; state is never zero.
+#[derive(Clone, Copy, Debug)]
 pub struct Rng32 {
     state: u32,
 }

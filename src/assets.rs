@@ -11,8 +11,36 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 
+/// Layer-0 fill: a full-screen color or a backdrop image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backdrop {
+    Color(Rgb565),
+    Image(Rgb565Image<'static>),
+}
+
+impl Backdrop {
+    /// Sample one display-space pixel (image misses fall back to black).
+    pub fn pixel(self, x: i32, y: i32) -> Rgb565 {
+        match self {
+            Self::Color(c) => c,
+            Self::Image(img) => img.pixel(x, y).unwrap_or(Rgb565::BLACK),
+        }
+    }
+
+    /// Paint the full target: solid fill, or the image at the origin.
+    pub fn fill<D>(self, display: &mut D) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        match self {
+            Self::Color(c) => display.fill_solid(&display.bounding_box(), c),
+            Self::Image(img) => img.draw(display, Point::zero()),
+        }
+    }
+}
+
 /// Big-endian RGB565 image (pixel payload only — no SM65 header).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb565Image<'a> {
     pub width: u16,
     pub height: u16,

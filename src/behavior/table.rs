@@ -4,7 +4,7 @@
 //! them and holds the cross-kind table tests.
 
 pub use crate::behavior::box_beh::{box_weights, BOX_IDLE_COLLIDE};
-pub use crate::behavior::plugin::stickman_weights;
+pub use crate::behavior::plugin::{dog_weights, stickman_weights};
 
 #[cfg(test)]
 mod tests {
@@ -146,6 +146,27 @@ mod tests {
         assert_eq!(total, 100);
         assert_eq!(flip_w, 15);
         assert_eq!(max_chain(rows), &[BehaviorId::FlipFacing][..]);
+        assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Talking]));
+    }
+
+    #[test]
+    fn dog_tap_has_no_swords_and_keeps_flip_share() {
+        let rows = dog_weights(BehaviorId::Walking, Event::Tap, EventCtx::default());
+        assert!(!rows.iter().any(|(c, _)| c.iter().any(|id| matches!(
+            id,
+            BehaviorId::SwordStance
+                | BehaviorId::SwordStab
+                | BehaviorId::SwordCrouchStance
+                | BehaviorId::SwordCrouchStab
+        ))));
+        let flip_w: u32 = rows
+            .iter()
+            .filter(|(c, _)| *c == [BehaviorId::FlipFacing])
+            .map(|(_, w)| *w as u32)
+            .sum();
+        let total: u32 = rows.iter().map(|(_, w)| *w as u32).sum();
+        assert_eq!(total, 100);
+        assert_eq!(flip_w, 15);
         assert!(rows.iter().any(|(c, _)| *c == [BehaviorId::Talking]));
     }
 }

@@ -29,6 +29,7 @@ impl BoxBehaviorId {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct BoxBrain {
     current: BoxBehaviorId,
     rng: Rng32,
@@ -39,9 +40,13 @@ pub struct BoxBrain {
 
 impl BoxBrain {
     pub fn new() -> Self {
+        Self::with_seed(0xB0B0_B0B0)
+    }
+
+    pub fn with_seed(seed: u32) -> Self {
         Self {
             current: BoxBehaviorId::Idle,
-            rng: Rng32::new(0xB0B0_B0B0),
+            rng: Rng32::new(seed),
             talk_remain_ms: 0,
             bubble_left: false,
             phrase: "",

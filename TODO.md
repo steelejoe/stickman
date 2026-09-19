@@ -70,16 +70,19 @@ TODOs:
   - Flip facing is a stickman behavior; tables own facing
   - Empty tap → random stickman behavior
 - [ ] Behaviors that control scale (and richer rotation beyond roll modes)
-- [ ] Optional: attach behaviors to non-stickman images / sprites
+- [x] Optional: attach behaviors to non-stickman images / sprites
 - [ ] Should I add friction? i.e. how slow does box move when pushed
 - [x] Raised baseline - walk/land on the top of models (e.g. the box); floor is the default
 - [x] Gravity - step off a lid → `Falling` event and pull down to the default floor
-- [ ] Rooms - what happens when I hit edges of map? can I load new background and swap positions?
+- [x] Rooms (first slice) — two rooms: existing home + solid blue to the right; walk off a connecting edge to enter; dog stays paused in home; each room has its own floor box
+- [ ] More rooms / richer room content
 - [ ] Add support for configuration (file over usb, wifi web site, ???)
   - Add things e.g .images converted to right format
   - Remove things
   - Change background
   - Change location of stuff
+  [x] add text support - text bubble above stickman
+  [x] make the box an image instead
 
 ## Tooling and hardware cleanup
 
