@@ -3,8 +3,10 @@
 use crate::game::Game;
 use crate::hardware::buttons::Button;
 use crate::hardware::touch::Cst816Touch;
+use crate::net;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use esp_hal::{
     delay::Delay,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
@@ -147,7 +149,7 @@ impl App {
     pub async fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
-            "Tap an entity to roll its table; empty tap picks a random stickman behavior. BOOT cycles stickman behaviors. Looping clips roll a finished table after each cycle."
+            "Tap an entity to roll its table; empty tap picks a random stickman behavior. BOOT cycles stickman behaviors. Looping clips roll a finished table after each cycle. Tap the top-right corner to enable Wi-Fi."
         );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);
@@ -161,8 +163,15 @@ impl App {
 
             if let Some(ref mut touch) = self.touch {
                 if let Some(point) = touch.poll_tap() {
-                    esp_println::println!("Touch: ({}, {})", point.x, point.y);
-                    self.game.on_tap(point.x as u32, point.y as u32);
+                    let x = point.x as u32;
+                    let y = point.y as u32;
+                    if !net::is_started() && net::is_enable_tap(x, y) {
+                        esp_println::println!("Touch: enable Wi-Fi ({x}, {y})");
+                        net::try_start();
+                    } else {
+                        esp_println::println!("Touch: ({x}, {y})");
+                        self.game.on_tap(x, y);
+                    }
                 }
             }
             // BOOT button → next behavior (no position).
@@ -179,6 +188,15 @@ impl App {
 
             self.game.update(delta_ms);
             self.game.draw(&mut self.display).unwrap();
+            if !net::is_started() {
+                // Affordable tap target: top-right outline while Wi-Fi is off.
+                let size = 16;
+                let x = DISPLAY_WIDTH as i32 - size - 4;
+                Rectangle::new(Point::new(x, 4), Size::new(size as u32, size as u32))
+                    .into_styled(PrimitiveStyle::with_stroke(Rgb565::WHITE, 1))
+                    .draw(&mut self.display)
+                    .ok();
+            }
 
             // Yield to the core-0 RTOS/radio tasks instead of a busy-wait.
             let _ = frame_duration;

@@ -1,11 +1,11 @@
-//! Speech bubble: rounded body, sharp tail at the head, 6-pt text.
+//! Speech bubble: rounded body, sharp tail at the head, 1.5× 10×20 text.
 
 use crate::stickman::ir::{BoneKind, PoseScratch};
 use crate::stickman::library;
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{Point, Size};
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
@@ -18,8 +18,11 @@ const WHITE: Rgb565 = Rgb565::WHITE;
 const BLACK: Rgb565 = Rgb565::BLACK;
 /// Soft gray for the drop shadow (no alpha on the panel).
 const SHADOW: Rgb565 = Rgb565::new(8, 16, 8);
-/// 6-pt bitmap cell used for measure and draw.
-const FONT: &embedded_graphics::mono_font::MonoFont<'_> = &FONT_6X10;
+/// 10×20 bitmap cell, drawn at [`TEXT_SCALE_NUM`]/[`TEXT_SCALE_DEN`].
+const FONT: &embedded_graphics::mono_font::MonoFont<'_> = &FONT_10X20;
+/// 3/2 nearest-neighbor scale (~15×30 cells).
+const TEXT_SCALE_NUM: i32 = 3;
+const TEXT_SCALE_DEN: i32 = 2;
 const PAD_X: i32 = 7;
 const PAD_Y: i32 = 6;
 const STROKE: u32 = 2;
@@ -200,8 +203,64 @@ where
     }
 
     let style = MonoTextStyle::new(FONT, BLACK);
-    Text::with_baseline(bubble.text(), bubble.text_pos, style, Baseline::Top).draw(display)?;
+    let mut scaled = ScaledText {
+        parent: display,
+        origin: bubble.text_pos,
+    };
+    Text::with_baseline(bubble.text(), Point::zero(), style, Baseline::Top).draw(&mut scaled)?;
     Ok(())
+}
+
+fn scale_px(v: i32) -> i32 {
+    v * TEXT_SCALE_NUM / TEXT_SCALE_DEN
+}
+
+/// Maps unscaled font pixels onto `parent` at [`TEXT_SCALE_NUM`]/[`TEXT_SCALE_DEN`].
+struct ScaledText<'a, D> {
+    parent: &'a mut D,
+    origin: Point,
+}
+
+impl<D> DrawTarget for ScaledText<'_, D>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    type Color = Rgb565;
+    type Error = D::Error;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(p, color) in pixels {
+            let x0 = self.origin.x + scale_px(p.x);
+            let y0 = self.origin.y + scale_px(p.y);
+            let x1 = self.origin.x + scale_px(p.x + 1);
+            let y1 = self.origin.y + scale_px(p.y + 1);
+            if x1 > x0 && y1 > y0 {
+                self.parent.fill_solid(
+                    &Rectangle::new(
+                        Point::new(x0, y0),
+                        Size::new((x1 - x0) as u32, (y1 - y0) as u32),
+                    ),
+                    color,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<D> OriginDimensions for ScaledText<'_, D>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    fn size(&self) -> Size {
+        Size::new(
+            FONT.character_size.width * TEXT_CAP as u32,
+            FONT.character_size.height * 8,
+        )
+    }
 }
 
 fn rounded(body: Rectangle, corner: u32) -> RoundedRectangle {
@@ -213,8 +272,8 @@ fn corner_radius(w: i32, h: i32) -> u32 {
 }
 
 fn text_size(text: &str) -> (i32, i32) {
-    let adv = (FONT.character_size.width + FONT.character_spacing) as i32;
-    let line_h = FONT.character_size.height as i32;
+    let adv = scale_px((FONT.character_size.width + FONT.character_spacing) as i32);
+    let line_h = scale_px(FONT.character_size.height as i32);
     let mut lines = 1i32;
     let mut max_w = 0i32;
     let mut w = 0i32;
@@ -278,6 +337,15 @@ fn aabb_of(pts: &[Point]) -> Rectangle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_cell_is_one_and_a_half_the_bitmap() {
+        let raw_w = (FONT.character_size.width + FONT.character_spacing) as i32;
+        let raw_h = FONT.character_size.height as i32;
+        let (tw, th) = text_size("A");
+        assert_eq!(tw, raw_w * TEXT_SCALE_NUM / TEXT_SCALE_DEN);
+        assert_eq!(th, raw_h * TEXT_SCALE_NUM / TEXT_SCALE_DEN);
+    }
 
     #[test]
     fn longer_text_makes_a_wider_body() {
@@ -350,8 +418,8 @@ mod tests {
         use crate::dirty::SliceDisplay;
         let head = Point::new(28, 72);
         let bubble = layout(head, 6, "Idle\nWalk", false);
-        const W: u32 = 100;
-        const H: u32 = 80;
+        const W: u32 = 140;
+        const H: u32 = 90;
         let mut buf = [Rgb565::RED; (W * H) as usize];
         let mut display = SliceDisplay::new(&mut buf, W, H);
         draw(&mut display, &bubble).unwrap();
