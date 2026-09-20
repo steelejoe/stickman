@@ -6,7 +6,6 @@ use crate::hardware::touch::Cst816Touch;
 use crate::net;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use esp_hal::{
     delay::Delay,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
@@ -116,7 +115,7 @@ impl App {
                 }
                 match touch.read() {
                     Ok(_) => esp_println::println!(
-                        "Touch: CST816 ready (tap an entity; empty space: random stickman)"
+                        "Touch: CST816 ready (menu: CFG / BOX / DOG / MAN)"
                     ),
                     Err(_) => esp_println::println!(
                         "Touch: probe failed at boot; taps may still work after contact"
@@ -149,7 +148,7 @@ impl App {
     pub async fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
-            "Tap an entity to roll its table; empty tap picks a random stickman behavior. BOOT cycles stickman behaviors. Looping clips roll a finished table after each cycle. Tap the top-right corner to enable Wi-Fi."
+            "Menu: CFG enables Wi-Fi; BOX / DOG / MAN tap that figure. Room taps do nothing. BOOT cycles stickman behaviors."
         );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);
@@ -165,12 +164,11 @@ impl App {
                 if let Some(point) = touch.poll_tap() {
                     let x = point.x as u32;
                     let y = point.y as u32;
-                    if !net::is_started() && net::is_enable_tap(x, y) {
-                        esp_println::println!("Touch: enable Wi-Fi ({x}, {y})");
+                    if self.game.on_tap(x, y) {
+                        esp_println::println!("Menu: CFG — enable Wi-Fi");
                         net::try_start();
-                    } else {
-                        esp_println::println!("Touch: ({x}, {y})");
-                        self.game.on_tap(x, y);
+                    } else if crate::menu::hit_button(x, y).is_some() {
+                        esp_println::println!("Menu: ({x}, {y})");
                     }
                 }
             }
@@ -188,15 +186,6 @@ impl App {
 
             self.game.update(delta_ms);
             self.game.draw(&mut self.display).unwrap();
-            if !net::is_started() {
-                // Affordable tap target: top-right outline while Wi-Fi is off.
-                let size = 16;
-                let x = DISPLAY_WIDTH as i32 - size - 4;
-                Rectangle::new(Point::new(x, 4), Size::new(size as u32, size as u32))
-                    .into_styled(PrimitiveStyle::with_stroke(Rgb565::WHITE, 1))
-                    .draw(&mut self.display)
-                    .ok();
-            }
 
             // Yield to the core-0 RTOS/radio tasks instead of a busy-wait.
             let _ = frame_duration;

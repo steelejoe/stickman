@@ -10,6 +10,7 @@ pub mod dirty;
 pub mod game;
 pub mod hardware;
 pub mod layer;
+pub mod menu;
 pub mod room;
 pub mod stickman;
 

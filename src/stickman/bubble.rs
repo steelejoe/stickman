@@ -1,5 +1,6 @@
 //! Speech bubble: rounded body, sharp tail at the head, 1.5× 10×20 text.
 
+use crate::menu::ROOM_LEFT;
 use crate::stickman::ir::{BoneKind, PoseScratch};
 use crate::stickman::library;
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
@@ -301,7 +302,7 @@ fn place_body(
     let left_x = head.x - head_r - SIDE_GAP - body_w;
     let right_x = head.x + head_r + SIDE_GAP;
     let screen_w = DISPLAY_WIDTH as i32;
-    let min_x = (1 - SHADOW_DX).max(1);
+    let min_x = (ROOM_LEFT + 1 - SHADOW_DX).max(ROOM_LEFT + 1);
     let fits = |x: i32| x >= min_x && x + body_w < screen_w - 1;
 
     let mut left = prefer_left;
@@ -394,10 +395,10 @@ mod tests {
 
     #[test]
     fn near_the_left_edge_flips_to_the_right() {
-        let head = Point::new(20, 160);
+        let head = Point::new(ROOM_LEFT + 20, 160);
         let bubble = layout(head, 6, "SwordCrouchStance", true);
         assert!(!bubble.is_left());
-        assert!(bubble.body.top_left.x >= 1);
+        assert!(bubble.body.top_left.x >= ROOM_LEFT + 1);
     }
 
     #[test]

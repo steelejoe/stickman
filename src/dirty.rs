@@ -6,6 +6,7 @@
 //! a single [`DrawTarget::fill_contiguous`] (one window, streamed pixels).
 
 use crate::assets::Backdrop;
+use crate::menu;
 use crate::stickman::geometry::{self, Segment, MAX_FLOOR_SEGS};
 use crate::stickman::ir::PoseScratch;
 use crate::stickman::render;
@@ -107,7 +108,8 @@ fn screen_bounds() -> Rectangle {
 }
 
 fn clamp_to_screen(rect: Rectangle) -> Rectangle {
-    rect.intersection(&screen_bounds())
+    rect.intersection(&menu::room_rect())
+        .intersection(&screen_bounds())
 }
 
 fn union_rects(a: Rectangle, b: Rectangle) -> Rectangle {
@@ -132,8 +134,12 @@ pub fn draw_background<D>(display: &mut D, background: Backdrop) -> Result<(), D
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    background.fill(display)?;
-    render::draw_floor(display)
+    match background {
+        Backdrop::Color(c) => display.fill_solid(&menu::room_rect(), c)?,
+        Backdrop::Image(img) => img.blit_rect(display, menu::room_rect())?,
+    }
+    render::draw_floor(display)?;
+    menu::draw(display)
 }
 
 fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Backdrop) {

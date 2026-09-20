@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn crawl_on_downhill_drops_hands_below_knees() {
-        let x = crate::DISPLAY_WIDTH as i32 * 2 / 3 - 20;
+        let x = crate::menu::ROOM_LEFT + crate::menu::room_width() as i32 * 2 / 3 - 20;
         assert!(geometry::floor_slope_deg_at(x) > 0);
         let pose = sample_crawl_on_floor(x, false);
         let hands = mean_tip_y(
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn crawl_on_uphill_raises_hands_above_knees() {
-        let x = crate::DISPLAY_WIDTH as i32 / 3 + 20;
+        let x = crate::menu::ROOM_LEFT + crate::menu::room_width() as i32 / 3 + 20;
         assert!(geometry::floor_slope_deg_at(x) < 0);
         let pose = sample_crawl_on_floor(x, false);
         let hands = mean_tip_y(
@@ -615,7 +615,7 @@ mod tests {
 
     #[test]
     fn airborne_pose_stays_upright_over_a_ramp() {
-        let x = crate::DISPLAY_WIDTH as i32 * 2 / 3 - 20;
+        let x = crate::menu::ROOM_LEFT + crate::menu::room_width() as i32 * 2 / 3 - 20;
         let mut actor = Actor::default();
         actor.play(crate::stickman::ir::ClipId::Idle);
         actor.x = x;

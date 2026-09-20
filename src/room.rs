@@ -7,6 +7,7 @@
 use crate::assets::{Backdrop, Rgb565Image};
 use crate::behavior::event::Rng32;
 use crate::collision::CollisionKind;
+use crate::menu::ROOM_LEFT;
 use crate::DISPLAY_WIDTH;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::RgbColor;
@@ -56,7 +57,7 @@ impl RoomId {
 
 /// Random X on the floor, inset so a crate stays fully on-screen.
 pub fn random_floor_x(rng: &mut Rng32, margin: i32) -> i32 {
-    let lo = margin;
+    let lo = ROOM_LEFT + margin;
     let hi = DISPLAY_WIDTH as i32 - margin;
     let span = (hi - lo).max(1);
     lo + (rng.next_u32() as i32).rem_euclid(span)
@@ -95,7 +96,7 @@ mod tests {
         let margin = 32;
         for _ in 0..32 {
             let x = random_floor_x(&mut rng, margin);
-            assert!(x >= margin);
+            assert!(x >= ROOM_LEFT + margin);
             assert!(x <= DISPLAY_WIDTH as i32 - margin);
         }
     }

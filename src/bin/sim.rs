@@ -235,7 +235,8 @@ fn main() {
 
     println!("Stickman simulation running.");
     println!("  Spacebar         → cycle behavior (BOOT button)");
-    println!("  Left mouse click → tap entity (table) or empty (random stickman)");
+    println!("  Left 30px strip  → CFG / BOX / DOG / MAN");
+    println!("  Room click       → ignored (use the menu)");
     println!("  Auto             → random other behavior within 5s (input resets the timer)");
     println!("  Escape / close   → quit");
 
@@ -255,7 +256,9 @@ fn main() {
         if mouse && !prev_mouse {
             if let Some((x, y)) = window.get_mouse_pos(MouseMode::Clamp) {
                 // `get_mouse_pos` is already in buffer / display pixels.
-                game.on_tap(x as u32, y as u32);
+                if game.on_tap(x as u32, y as u32) {
+                    println!("Config: Wi-Fi enable is device-only");
+                }
             }
         }
         prev_mouse = mouse;

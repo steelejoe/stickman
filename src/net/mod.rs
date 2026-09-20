@@ -1,6 +1,6 @@
 //! Dual-core Wi-Fi website + USB `wifi.json` (core 1).
 //!
-//! Radio, USB, and the second core stay off until [`try_start`] (top-right tap).
+//! Radio, USB, and the second core stay off until [`try_start`] (config button).
 
 pub mod creds;
 pub mod fat;
@@ -9,7 +9,6 @@ pub mod usb;
 pub mod wifi;
 
 use crate::config::{ConfigCmd, NetMode, NetStatus, WifiCreds};
-use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -24,9 +23,6 @@ use esp_println::println;
 use esp_radio::wifi::{Interfaces, WifiController};
 use esp_rtos::embassy::Executor;
 use static_cell::StaticCell;
-
-/// Tap this many pixels from the top-right corner to turn Wi-Fi on.
-pub const ENABLE_TAP: u32 = 48;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 static HOLD: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<WifiHold>>> =
@@ -72,22 +68,11 @@ pub fn park(hold: WifiHold) {
     HOLD.lock(|slot| {
         *slot.borrow_mut() = Some(hold);
     });
-    println!(
-        "WiFi: parked (tap top-right {}x{} to enable)",
-        ENABLE_TAP, ENABLE_TAP
-    );
+    println!("WiFi: parked (tap CFG to enable)");
 }
 
 pub fn is_started() -> bool {
     STARTED.load(Ordering::Acquire)
-}
-
-/// True for a tap in the top-right enable zone (display pixels).
-pub fn is_enable_tap(x: u32, y: u32) -> bool {
-    x < DISPLAY_WIDTH
-        && y < DISPLAY_HEIGHT
-        && x + ENABLE_TAP >= DISPLAY_WIDTH
-        && y < ENABLE_TAP
 }
 
 /// Bring up radio + core 1 once. Returns true if this call started it.
@@ -100,7 +85,7 @@ pub fn try_start() -> bool {
         return false;
     };
 
-    println!("WiFi: enabling from tap...");
+    println!("WiFi: enabling from CFG...");
     let radio = match esp_radio::init() {
         Ok(c) => c,
         Err(e) => {

@@ -1,5 +1,6 @@
 //! Floor polyline (flat + ramps) and integer trig for FK / spin.
 
+use crate::menu::{room_width, ROOM_LEFT};
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embedded_graphics::geometry::Point;
 
@@ -140,13 +141,15 @@ pub fn atan2_deg(y: i32, x: i32) -> i32 {
 /// Returns the segment count.
 pub fn fill_floor_segments(out: &mut [Segment; MAX_FLOOR_SEGS]) -> usize {
     let base = floor_y();
+    let origin = ROOM_LEFT;
     let w = DISPLAY_WIDTH as i32;
-    let left = w / 3;
-    let right = w * 2 / 3;
+    let room = room_width() as i32;
+    let left = origin + room / 3;
+    let right = origin + room * 2 / 3;
     let span = (right - left).max(1);
     const SAMPLES: i32 = 4;
     let mut n = 0usize;
-    out[n] = Segment::new(0, base, left, base);
+    out[n] = Segment::new(origin, base, left, base);
     n += 1;
     let mut prev_x = left;
     let mut prev_y = base;
@@ -294,20 +297,20 @@ mod tests {
     #[test]
     fn floor_wings_match_flat_baseline() {
         let base = floor_y();
-        assert_eq!(floor_y_at(0), base);
+        assert_eq!(floor_y_at(ROOM_LEFT), base);
         assert_eq!(floor_y_at(DISPLAY_WIDTH as i32 - 1), base);
-        assert_eq!(floor_y_at(DISPLAY_WIDTH as i32 / 6), base);
-        assert_eq!(floor_y_at(DISPLAY_WIDTH as i32 * 5 / 6), base);
+        assert_eq!(floor_y_at(ROOM_LEFT + room_width() as i32 / 6), base);
+        assert_eq!(floor_y_at(ROOM_LEFT + room_width() as i32 * 5 / 6), base);
     }
 
     #[test]
     fn floor_middle_third_peaks_near_20px() {
         let base = floor_y();
-        let mid = DISPLAY_WIDTH as i32 / 2;
+        let mid = ROOM_LEFT + room_width() as i32 / 2;
         let peak = floor_y_at(mid);
         assert_eq!(peak, base - FLOOR_BUMP);
-        assert!(floor_y_at(DISPLAY_WIDTH as i32 / 3 + 8) < base);
-        assert!(floor_y_at(DISPLAY_WIDTH as i32 * 2 / 3 - 8) < base);
+        assert!(floor_y_at(ROOM_LEFT + room_width() as i32 / 3 + 8) < base);
+        assert!(floor_y_at(ROOM_LEFT + room_width() as i32 * 2 / 3 - 8) < base);
     }
 
     #[test]
@@ -315,12 +318,12 @@ mod tests {
         let mut segs = [Segment::ZERO; MAX_FLOOR_SEGS];
         let n = fill_floor_segments(&mut segs);
         assert!(n >= 4 && n <= MAX_FLOOR_SEGS);
-        assert_eq!(segs[0].x0, 0);
+        assert_eq!(segs[0].x0, ROOM_LEFT);
         assert_eq!(segs[n - 1].x1, DISPLAY_WIDTH as i32);
         for i in 0..n {
             assert!(segs[i].x1 >= segs[i].x0, "seg {i}");
         }
-        for x in [0, 50, 178, 267, 400, 535] {
+        for x in [ROOM_LEFT, 50, 178, 267, 400, 535] {
             let y = floor_y_at(x);
             assert!(y <= floor_y());
             assert!(y >= floor_y() - FLOOR_BUMP);
@@ -352,10 +355,13 @@ mod tests {
 
     #[test]
     fn floor_wings_are_flat_ramps_are_not() {
-        assert_eq!(floor_slope_deg_at(40), 0);
-        assert_eq!(floor_slope_deg_at(DISPLAY_WIDTH as i32 * 5 / 6), 0);
-        let up = DISPLAY_WIDTH as i32 / 3 + 20;
-        let down = DISPLAY_WIDTH as i32 * 2 / 3 - 20;
+        assert_eq!(floor_slope_deg_at(ROOM_LEFT + 10), 0);
+        assert_eq!(
+            floor_slope_deg_at(ROOM_LEFT + room_width() as i32 * 5 / 6),
+            0
+        );
+        let up = ROOM_LEFT + room_width() as i32 / 3 + 20;
+        let down = ROOM_LEFT + room_width() as i32 * 2 / 3 - 20;
         assert!(floor_slope_deg_at(up) < 0, "left ramp climbs toward +X");
         assert!(
             floor_slope_deg_at(down) > 0,

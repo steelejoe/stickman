@@ -9,6 +9,7 @@
 //! Vertical walls use `e = 1` (bounce). Entered wall/side hits become
 //! [`crate::behavior::event::Event::Collision`].
 
+use crate::menu::ROOM_LEFT;
 use crate::stickman::geometry::{self, Segment, MAX_FLOOR_SEGS};
 use crate::stickman::ir::Actor;
 use crate::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
@@ -36,6 +37,8 @@ impl CollisionKind {
 /// Display, floor polyline, and screen-edge colliders.
 #[derive(Clone, Copy, Debug)]
 pub struct World {
+    /// Inclusive left wall (room origin; menu sits to the left of this).
+    pub left: i32,
     pub width: i32,
     pub height: i32,
     pub floor: [Segment; MAX_FLOOR_SEGS],
@@ -47,6 +50,7 @@ impl World {
         let mut floor = [Segment::ZERO; MAX_FLOOR_SEGS];
         let floor_n = geometry::fill_floor_segments(&mut floor);
         Self {
+            left: ROOM_LEFT,
             width: DISPLAY_WIDTH as i32,
             height: DISPLAY_HEIGHT as i32,
             floor,
@@ -58,6 +62,7 @@ impl World {
         let mut floor = [Segment::ZERO; MAX_FLOOR_SEGS];
         floor[0] = Segment::new(0, floor_y, width, floor_y);
         Self {
+            left: 0,
             width,
             height,
             floor,
@@ -293,7 +298,7 @@ fn resolve_world(
     mem: &mut ContactMemory,
     hits: &mut CollisionHits,
 ) {
-    let left = hit.top_left.x <= 0;
+    let left = hit.top_left.x <= world.left;
     let right = max_x(hit) >= world.width;
     let top = hit.top_left.y <= 0;
     let bottom = max_y(hit) >= world.height;
@@ -368,7 +373,7 @@ fn enter_vertical(
     }
     reflect(actor, nx as i32 * MILLI, ny as i32 * MILLI, 1);
     match kind {
-        CollisionKind::EdgeLeft => actor.x += 0 - hit.top_left.x,
+        CollisionKind::EdgeLeft => actor.x += world.left - hit.top_left.x,
         CollisionKind::EdgeRight => actor.x -= max_x(hit) - world.width,
         _ => {}
     }
@@ -595,6 +600,7 @@ mod tests {
         let mut floor = [Segment::ZERO; MAX_FLOOR_SEGS];
         floor[0] = Segment::new(0, 40, 80, 20);
         let world = World {
+            left: 0,
             width: 200,
             height: 100,
             floor,
@@ -614,6 +620,7 @@ mod tests {
         let mut floor = [Segment::ZERO; MAX_FLOOR_SEGS];
         floor[0] = Segment::new(0, 40, 80, 20);
         let world = World {
+            left: 0,
             width: 200,
             height: 100,
             floor,

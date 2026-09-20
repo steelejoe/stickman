@@ -178,42 +178,57 @@ impl Game {
         self.behavior_mgr.cycle_next(&mut self.actor);
     }
 
-    /// Hit-test tap: the entity under the point rolls its tap table.
-    /// Empty space: 15% flip facing, otherwise a random other stickman behavior.
-    pub fn on_tap(&mut self, x: u32, y: u32) {
-        eval::sample(&self.actor, &mut self.scratch);
-        eval::sample(&self.box_actor, &mut self.box_scratch);
-        if self.dog_in_room() {
-            eval::sample(&self.dog_actor, &mut self.dog_scratch);
+    /// Menu taps only. Room taps do nothing. Returns true for **config** (enable Wi-Fi).
+    pub fn on_tap(&mut self, x: u32, y: u32) -> bool {
+        match crate::menu::hit_button(x, y) {
+            Some(crate::menu::MenuButton::Config) => true,
+            Some(crate::menu::MenuButton::Box) => {
+                self.tap_box();
+                false
+            }
+            Some(crate::menu::MenuButton::Dog) => {
+                self.tap_dog();
+                false
+            }
+            Some(crate::menu::MenuButton::Man) => {
+                self.tap_man();
+                false
+            }
+            None => false,
         }
-        let p = Point::new(x as i32, y as i32);
-        let on_stick = collision::contains_point(eval::hitbox(&self.scratch), p);
-        let on_box = collision::contains_point(eval::hitbox(&self.box_scratch), p);
-        let on_dog =
-            self.dog_in_room() && collision::contains_point(eval::hitbox(&self.dog_scratch), p);
-        let entropy = x ^ y.wrapping_shl(16);
-        // Prefer the crate when the point is on it (including overlap with the
-        // stickman AABB while standing on the lid), then the dog, then the stickman.
-        if on_box {
-            self.box_brain.on_event(
-                &mut self.box_actor,
-                Event::Tap,
-                EventCtx::default(),
-                entropy,
-            );
-        } else if on_dog {
-            self.dog_brain.on_event(
-                &mut self.dog_actor,
-                Event::Tap,
-                EventCtx::default(),
-                entropy,
-            );
-        } else if on_stick {
-            self.behavior_mgr
-                .on_event(&mut self.actor, Event::Tap, EventCtx::default(), entropy);
-        } else {
-            self.behavior_mgr.cycle_empty_tap(&mut self.actor, entropy);
-        }
+    }
+
+    fn tap_entropy(&self, salt: u32) -> u32 {
+        salt ^ (self.actor.x as u32).wrapping_mul(0x45D9_F3B)
+            ^ self.actor.time_ms
+            ^ (self.box_actor.x as u32)
+            ^ self.dog_actor.time_ms
+    }
+
+    fn tap_box(&mut self) {
+        let entropy = self.tap_entropy(0xB0);
+        self.box_brain.on_event(
+            &mut self.box_actor,
+            Event::Tap,
+            EventCtx::default(),
+            entropy,
+        );
+    }
+
+    fn tap_dog(&mut self) {
+        let entropy = self.tap_entropy(0xD0);
+        self.dog_brain.on_event(
+            &mut self.dog_actor,
+            Event::Tap,
+            EventCtx::default(),
+            entropy,
+        );
+    }
+
+    fn tap_man(&mut self) {
+        let entropy = self.tap_entropy(0xA1);
+        self.behavior_mgr
+            .on_event(&mut self.actor, Event::Tap, EventCtx::default(), entropy);
     }
 
     pub fn update(&mut self, delta_ms: u64) {
@@ -449,7 +464,7 @@ impl Game {
         const INSET: i32 = 28;
         match from_edge {
             CollisionKind::EdgeRight => {
-                self.actor.x = INSET;
+                self.actor.x = crate::menu::ROOM_LEFT + INSET;
                 self.actor.facing_left = false;
             }
             CollisionKind::EdgeLeft => {
@@ -483,8 +498,8 @@ impl Game {
         let hit = eval::hitbox(&self.scratch);
         let left = hit.top_left.x;
         let right = hit.top_left.x + hit.size.width as i32;
-        if left < 1 {
-            self.actor.x += 1 - left;
+        if left < crate::menu::ROOM_LEFT + 1 {
+            self.actor.x += crate::menu::ROOM_LEFT + 1 - left;
         }
         if right > DISPLAY_WIDTH as i32 - 1 {
             self.actor.x -= right - (DISPLAY_WIDTH as i32 - 1);
@@ -841,55 +856,95 @@ mod tests {
         assert!(game.actor.y < game.dog_actor.y);
     }
 
+    fn menu_xy(button: crate::menu::MenuButton) -> (u32, u32) {
+        let r = crate::menu::button_rect(button.index()).expect("button");
+        (
+            r.top_left.x as u32 + r.size.width / 2,
+            r.top_left.y as u32 + r.size.height / 2,
+        )
+    }
+
     #[test]
-    fn tap_empty_space_picks_other_stickman_behavior() {
+    fn room_tap_does_nothing() {
         let mut game = Game::new();
-        let clip = game.actor.clip;
-        game.on_tap(1, 1);
-        assert_ne!(game.actor.clip, clip);
+        let stick = game.actor.clip;
+        let box_clip = game.box_actor.clip;
+        let dog = game.dog_actor.clip;
+        eval::sample(&game.box_actor, &mut game.box_scratch);
+        let hit = eval::hitbox(&game.box_scratch);
+        let x = hit.top_left.x as u32 + hit.size.width / 2;
+        let y = hit.top_left.y as u32 + hit.size.height / 2;
+        assert!(!game.on_tap(x, y));
+        assert!(!game.on_tap(crate::menu::ROOM_LEFT as u32 + 10, 1));
+        assert_eq!(game.actor.clip, stick);
+        assert_eq!(game.box_actor.clip, box_clip);
+        assert_eq!(game.dog_actor.clip, dog);
+    }
+
+    #[test]
+    fn menu_config_requests_wifi_without_tapping_entities() {
+        let mut game = Game::new();
+        let stick = game.actor.clip;
+        let (x, y) = menu_xy(crate::menu::MenuButton::Config);
+        assert!(game.on_tap(x, y));
+        assert_eq!(game.actor.clip, stick);
         assert_eq!(game.box_actor.clip, ClipId::BoxIdle);
         assert_eq!(game.dog_actor.clip, ClipId::DogWalk);
     }
 
     #[test]
-    fn tap_on_box_does_not_cycle_stickman() {
+    fn menu_box_taps_the_crate() {
         let mut game = Game::new();
-        game.actor.facing_left = true;
-        let stick_clip = game.actor.clip;
-        eval::sample(&game.box_actor, &mut game.box_scratch);
-        let hit = eval::hitbox(&game.box_scratch);
-        let x = hit.top_left.x as u32 + hit.size.width / 2;
-        let y = hit.top_left.y as u32 + hit.size.height / 2;
-        game.on_tap(x, y);
-        assert_eq!(game.actor.clip, stick_clip);
-        assert!(game.actor.facing_left);
-        assert!(matches!(
-            game.box_actor.clip,
-            ClipId::BoxIdle | ClipId::BoxSlide | ClipId::BoxRoll | ClipId::BoxShudder
+        let stick = game.actor.clip;
+        let (x, y) = menu_xy(crate::menu::MenuButton::Box);
+        let mut changed = false;
+        for _ in 0..24 {
+            game.on_tap(x, y);
+            if game.box_brain.current() != BoxBehaviorId::Idle {
+                changed = true;
+                break;
+            }
+        }
+        assert!(changed, "box tap should eventually leave idle");
+        assert_eq!(game.actor.clip, stick);
+    }
+
+    #[test]
+    fn menu_dog_taps_the_dog() {
+        let mut game = Game::new();
+        let stick = game.actor.clip;
+        let (x, y) = menu_xy(crate::menu::MenuButton::Dog);
+        let mut changed = false;
+        for _ in 0..16 {
+            game.on_tap(x, y);
+            if game.dog_brain.current() != crate::behavior::plugin::BehaviorId::Walking {
+                changed = true;
+                break;
+            }
+        }
+        assert!(changed, "dog tap should eventually leave walk");
+        assert_eq!(game.actor.clip, stick);
+        assert!(core::ptr::eq(
+            library::clip(game.dog_actor.clip).species,
+            &library::DOG
         ));
     }
 
     #[test]
-    fn tap_on_box_wins_when_stickman_overlaps() {
+    fn menu_man_taps_the_stickman() {
         let mut game = Game::new();
-        game.actor.x = game.box_actor.x;
-        game.actor.y = game.box_actor.y;
-        eval::sample(&game.actor, &mut game.scratch);
-        eval::sample(&game.box_actor, &mut game.box_scratch);
-        let hit = eval::hitbox(&game.box_scratch);
-        let p = Point::new(
-            hit.top_left.x + hit.size.width as i32 / 2,
-            hit.top_left.y + hit.size.height as i32 / 2,
-        );
-        assert!(collision::contains_point(eval::hitbox(&game.scratch), p));
-        assert!(collision::contains_point(hit, p));
-        let stick_clip = game.actor.clip;
-        game.on_tap(p.x as u32, p.y as u32);
-        assert_eq!(game.actor.clip, stick_clip);
-        assert!(matches!(
-            game.box_actor.clip,
-            ClipId::BoxIdle | ClipId::BoxSlide | ClipId::BoxRoll | ClipId::BoxShudder
-        ));
+        let box_clip = game.box_actor.clip;
+        let (x, y) = menu_xy(crate::menu::MenuButton::Man);
+        let mut changed = false;
+        for _ in 0..16 {
+            game.on_tap(x, y);
+            if game.behavior_mgr.current() != crate::behavior::plugin::BehaviorId::Walking {
+                changed = true;
+                break;
+            }
+        }
+        assert!(changed, "man tap should eventually leave walk");
+        assert_eq!(game.box_actor.clip, box_clip);
     }
 
     #[test]
@@ -908,22 +963,6 @@ mod tests {
         game.update(0);
         let clip = library::clip(game.dog_actor.clip);
         assert!(core::ptr::eq(clip.species, &library::DOG));
-    }
-
-    #[test]
-    fn tap_on_dog_does_not_cycle_stickman() {
-        let mut game = Game::new();
-        let stick_clip = game.actor.clip;
-        eval::sample(&game.dog_actor, &mut game.dog_scratch);
-        let hit = eval::hitbox(&game.dog_scratch);
-        let x = hit.top_left.x as u32 + hit.size.width / 2;
-        let y = hit.top_left.y as u32 + hit.size.height / 2;
-        game.on_tap(x, y);
-        assert_eq!(game.actor.clip, stick_clip);
-        assert!(core::ptr::eq(
-            library::clip(game.dog_actor.clip).species,
-            &library::DOG
-        ));
     }
 
     #[test]
@@ -1080,11 +1119,18 @@ mod tests {
 
     fn press_against_edge(game: &mut Game, left: bool) {
         game.actor.facing_left = left;
+        // Sample on a flat wing first; the spawn pose is rotated on the bump.
+        game.actor.x = if left {
+            crate::menu::ROOM_LEFT + 40
+        } else {
+            DISPLAY_WIDTH as i32 - 40
+        };
+        game.actor.y = floor_y_at(game.actor.x);
         eval::sample(&game.actor, &mut game.scratch);
         let hit = eval::hitbox(&game.scratch);
         if left {
             let extent = game.actor.x - hit.top_left.x;
-            game.actor.x = extent.max(1);
+            game.actor.x = crate::menu::ROOM_LEFT + extent.max(1);
         } else {
             let extent = hit.top_left.x + hit.size.width as i32 - game.actor.x;
             game.actor.x = DISPLAY_WIDTH as i32 - extent;
