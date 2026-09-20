@@ -201,10 +201,18 @@ impl App {
             while let Some(rooms) = crate::net::try_recv_rooms() {
                 self.game.apply_rooms(rooms);
             }
+            while let Some(job) = crate::net::try_recv_persist() {
+                crate::net::run_persist(job).await;
+            }
+            while let Some(err) = crate::net::try_recv_core1_error() {
+                esp_println::println!("WiFi: core 1 error: {err}");
+            }
 
             if self.game.in_config_mode() {
                 let s = net::try_status();
-                if s.configured {
+                if !s.last_error.is_empty() {
+                    self.game.set_config_status("radio failed", "init error");
+                } else if s.configured {
                     let ssid = if s.ssid.is_empty() {
                         "..."
                     } else {

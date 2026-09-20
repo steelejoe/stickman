@@ -12,12 +12,14 @@ use crate::config::{ConfigCmd, NetMode, NetStatus, WifiCreds};
 use crate::room::{RoomsConfig, RoomsUpdate};
 use crate::speech::SpeechConfig;
 use core::cell::RefCell;
+use core::fmt::Write as _;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
+use embassy_sync::watch::Watch;
 use esp_hal::interrupt::software::SoftwareInterrupt;
 use esp_hal::peripherals::{CPU_CTRL, FLASH, GPIO19, GPIO20, USB0, WIFI};
 use esp_hal::system::Stack;
@@ -62,6 +64,19 @@ pub static STORED_ROOMS: Mutex<CriticalSectionRawMutex, RoomStore> = Mutex::new(
     },
     images: [None; 3],
 });
+/// Flash writes run on core 0 so auto-park stops Wi-Fi, not the game loop.
+#[derive(Clone)]
+pub enum PersistJob {
+    Wifi(WifiCreds),
+    WifiClear,
+    Speech(SpeechConfig),
+    SpeechClear,
+    Rooms,
+    RoomImage(usize),
+}
+
+pub static PERSIST_CH: Channel<CriticalSectionRawMutex, PersistJob, 2> = Channel::new();
+pub static PERSIST_DONE: Channel<CriticalSectionRawMutex, (), 2> = Channel::new();
 pub static CREDS_CH: Channel<CriticalSectionRawMutex, Option<WifiCreds>, 2> = Channel::new();
 pub static STORED_CREDS: Mutex<CriticalSectionRawMutex, Option<WifiCreds>> = Mutex::new(None);
 pub static NET_STATUS: Mutex<CriticalSectionRawMutex, NetStatus> = Mutex::new(NetStatus {
@@ -81,8 +96,10 @@ static STATUS_SNAP: BlockingMutex<CriticalSectionRawMutex, RefCell<NetStatus>> =
     }));
 /// Wakes the Wi-Fi task after USB writes new credentials.
 pub static CREDS_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-/// Wakes the Wi-Fi task when config mode wants the radio on or off.
-pub static RADIO_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// Wakes Wi-Fi and HTTP tasks when config mode wants the radio on or off.
+pub static RADIO_WATCH: Watch<CriticalSectionRawMutex, (), 8> = Watch::new();
+/// Core-1 bring-up failures for the game loop to print.
+pub static CORE1_ERR: Channel<CriticalSectionRawMutex, heapless::String<96>, 1> = Channel::new();
 
 /// Peripherals parked until a tap enables the radio.
 pub struct WifiHold {
@@ -124,10 +141,21 @@ pub fn radio_wanted() -> bool {
     RADIO_WANTED.load(Ordering::Acquire)
 }
 
+/// Sleep until CFG asks for the radio. Safe for several tasks at once.
+pub async fn wait_radio_wanted() {
+    let Some(mut wake) = RADIO_WATCH.receiver() else {
+        core::future::pending::<()>().await;
+        return;
+    };
+    while !radio_wanted() {
+        wake.changed().await;
+    }
+}
+
 /// Connect (or stay connected) while config mode is on; stop the radio when off.
 pub fn set_wanted(on: bool) {
     RADIO_WANTED.store(on, Ordering::Release);
-    RADIO_SIGNAL.signal(());
+    RADIO_WATCH.sender().send(());
     if on {
         println!("WiFi: config mode — radio requested");
     } else {
@@ -151,54 +179,93 @@ pub fn try_start() -> bool {
     };
 
     println!("WiFi: enabling from CFG...");
+    const CORE1_STACK: usize = 32 * 1024;
+    static STACK: StaticCell<Stack<CORE1_STACK>> = StaticCell::new();
+    println!("Starting core 1 (radio + HTTP + embassy-net)");
+    let WifiHold {
+        wifi,
+        usb0,
+        usb_dp,
+        usb_dm,
+        flash,
+        cpu_ctrl,
+        sw0,
+        sw1,
+        seed,
+    } = hold;
+    esp_rtos::start_second_core(
+        cpu_ctrl,
+        sw0,
+        sw1,
+        STACK.init(Stack::new()),
+        move || core1_entry(wifi, usb0, usb_dp, usb_dm, flash, seed),
+    );
+    true
+}
+
+/// Radio init must run here so Wi-Fi tasks pin to core 1, not the game loop.
+fn core1_entry(
+    wifi: WIFI<'static>,
+    usb0: USB0<'static>,
+    usb_dp: GPIO20<'static>,
+    usb_dm: GPIO19<'static>,
+    flash: FLASH<'static>,
+    seed: u64,
+) {
     let radio = match esp_radio::init() {
         Ok(c) => c,
         Err(e) => {
-            println!("WiFi: radio init failed: {e:?}");
-            STARTED.store(false, Ordering::Release);
-            HOLD.lock(|slot| *slot.borrow_mut() = Some(hold));
-            return false;
+            report_core1_error(format_args!("radio init failed: {e:?}"));
+            loop {}
         }
     };
+    println!("WiFi: radio on core 1");
     static RADIO: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
     let radio = RADIO.init(radio);
-
-    let (controller, interfaces) = match esp_radio::wifi::new(radio, hold.wifi, Default::default())
-    {
+    let (controller, interfaces) = match esp_radio::wifi::new(radio, wifi, Default::default()) {
         Ok(v) => v,
         Err(e) => {
-            println!("WiFi: controller failed: {e:?}");
-            STARTED.store(false, Ordering::Release);
-            return false;
+            report_core1_error(format_args!("controller failed: {e:?}"));
+            loop {}
         }
     };
-
     let args = Core1Args {
         controller,
         interfaces,
-        usb0: hold.usb0,
-        usb_dp: hold.usb_dp,
-        usb_dm: hold.usb_dm,
-        flash: hold.flash,
-        seed: hold.seed,
+        usb0,
+        usb_dp,
+        usb_dm,
+        flash,
+        seed,
     };
+    static EXECUTOR: StaticCell<Executor> = StaticCell::new();
+    EXECUTOR.init(Executor::new()).run(move |spawner| {
+        if spawner.spawn(core1_main(args)).is_err() {
+            report_core1_error(format_args!("core1_main spawn failed"));
+        }
+    });
+}
 
-    const CORE1_STACK: usize = 32 * 1024;
-    static STACK: StaticCell<Stack<CORE1_STACK>> = StaticCell::new();
-    println!("Starting core 1 (USB + HTTP + embassy-net)");
-    esp_rtos::start_second_core(
-        hold.cpu_ctrl,
-        hold.sw0,
-        hold.sw1,
-        STACK.init(Stack::new()),
-        move || {
-            static EXECUTOR: StaticCell<Executor> = StaticCell::new();
-            EXECUTOR.init(Executor::new()).run(move |spawner| {
-                spawner.spawn(core1_main(args)).ok();
-            });
-        },
-    );
-    true
+fn report_core1_error(msg: impl core::fmt::Display) {
+    let mut s = heapless::String::<96>::new();
+    let _ = write!(&mut s, "{msg}");
+    println!("WiFi: {s}");
+    STATUS_SNAP.lock(|slot| {
+        let mut st = slot.borrow_mut();
+        st.mode = NetMode::Off;
+        st.last_error.clear();
+        for c in s.chars() {
+            if st.last_error.push(c).is_err() {
+                break;
+            }
+        }
+    });
+    let _ = CORE1_ERR.try_send(s);
+}
+
+/// Non-blocking take of a core-1 bring-up error (core 0 prints / overlay).
+pub fn try_recv_core1_error() -> Option<heapless::String<96>> {
+    CORE1_ERR.try_receive().ok()
 }
 
 #[embassy_executor::task]
@@ -243,6 +310,37 @@ pub fn try_recv_config() -> Option<ConfigCmd> {
     CONFIG_CH.try_receive().ok()
 }
 
+pub fn try_recv_persist() -> Option<PersistJob> {
+    PERSIST_CH.try_receive().ok()
+}
+
+async fn queue_persist(job: PersistJob) {
+    PERSIST_CH.send(job).await;
+    PERSIST_DONE.receive().await;
+}
+
+/// Run a flash persist job on core 0 (parks core 1 for the write).
+pub async fn run_persist(job: PersistJob) {
+    match job {
+        PersistJob::Wifi(creds) => creds::persist(&creds).await,
+        PersistJob::WifiClear => creds::persist_clear().await,
+        PersistJob::Speech(cfg) => creds::persist_speech(&cfg).await,
+        PersistJob::SpeechClear => creds::persist_speech_clear().await,
+        PersistJob::Rooms => {
+            let g = STORED_ROOMS.lock().await.clone();
+            creds::persist_rooms(&g.cfg, &g.images).await;
+        }
+        PersistJob::RoomImage(i) => {
+            let g = STORED_ROOMS.lock().await.clone();
+            if let Some(bytes) = g.images.get(i).copied().flatten() {
+                creds::persist_room_image(i, bytes).await;
+            }
+            creds::persist_rooms(&g.cfg, &g.images).await;
+        }
+    }
+    let _ = PERSIST_DONE.try_send(());
+}
+
 /// Publish a status snapshot for `/api/status` and the config-mode overlay.
 pub async fn set_status(update: impl FnOnce(&mut NetStatus)) {
     let mut g = NET_STATUS.lock().await;
@@ -251,14 +349,14 @@ pub async fn set_status(update: impl FnOnce(&mut NetStatus)) {
 }
 
 pub async fn save_wifi(creds: WifiCreds) {
-    creds::persist(&creds).await;
-    set_stored_creds(Some(creds)).await;
+    set_stored_creds(Some(creds.clone())).await;
+    queue_persist(PersistJob::Wifi(creds)).await;
     println!("WiFi: credentials saved (apply on next Config)");
 }
 
 pub async fn reset_wifi() {
-    creds::persist_clear().await;
     set_stored_creds(None).await;
+    queue_persist(PersistJob::WifiClear).await;
     println!("WiFi: credentials cleared (apply on next Config)");
 }
 
@@ -288,19 +386,19 @@ pub async fn stored_speech() -> SpeechConfig {
 }
 
 pub async fn save_speech(cfg: SpeechConfig) {
-    creds::persist_speech(&cfg).await;
     set_stored_speech(cfg.clone()).await;
     let _ = SPEECH_CH.try_receive();
-    let _ = SPEECH_CH.try_send(cfg);
+    let _ = SPEECH_CH.try_send(cfg.clone());
+    queue_persist(PersistJob::Speech(cfg)).await;
     println!("speech: saved");
 }
 
 pub async fn reset_speech() {
-    creds::persist_speech_clear().await;
     let cfg = SpeechConfig::default();
     set_stored_speech(cfg.clone()).await;
     let _ = SPEECH_CH.try_receive();
     let _ = SPEECH_CH.try_send(cfg);
+    queue_persist(PersistJob::SpeechClear).await;
     println!("speech: reset to defaults");
 }
 
@@ -346,28 +444,27 @@ pub async fn save_rooms(cfg: RoomsConfig) {
     {
         let mut g = STORED_ROOMS.lock().await;
         g.cfg = cfg;
-        creds::persist_rooms(&g.cfg, &g.images).await;
     }
     submit_rooms_now().await;
+    queue_persist(PersistJob::Rooms).await;
     println!("rooms: saved");
 }
 
 pub async fn reset_rooms() {
     set_stored_rooms(RoomStore::default()).await;
-    let store = stored_rooms().await;
-    creds::persist_rooms(&store.cfg, &store.images).await;
     submit_rooms_now().await;
+    queue_persist(PersistJob::Rooms).await;
     println!("rooms: reset to Home");
 }
 
 pub async fn save_room_image(i: usize, sm65: &[u8]) -> Result<(), &'static str> {
     let leaked = creds::install_room_sm65(i, sm65)?;
-    creds::persist_room_image(i, sm65).await;
     {
         let mut g = STORED_ROOMS.lock().await;
         g.images[i] = Some(leaked);
-        creds::persist_rooms(&g.cfg, &g.images).await;
     }
+    submit_rooms_now().await;
+    queue_persist(PersistJob::RoomImage(i)).await;
     Ok(())
 }
 

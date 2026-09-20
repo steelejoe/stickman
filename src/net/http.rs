@@ -2,12 +2,15 @@
 
 use crate::config::{parse_config_json, parse_wifi_action, NetStatus, WifiAction, WifiCreds};
 use crate::net::{
-    reset_rooms, reset_speech, reset_wifi, room_image_bytes, save_room_image, save_rooms,
-    save_speech, save_wifi, stored_rooms, stored_speech, submit_config, NET_STATUS, STORED_CREDS,
+    radio_wanted, reset_rooms, reset_speech, reset_wifi, room_image_bytes, save_room_image,
+    save_rooms, save_speech, save_wifi, stored_rooms, stored_speech, submit_config,
+    wait_radio_wanted, NET_STATUS, STORED_CREDS,
 };
 use crate::room::{parse_rooms_json, RoomsAction, SM65_ROOM_LEN};
 use crate::speech::{parse_speech_json, SpeechAction};
 use core::fmt::Write as _;
+use embassy_futures::select::{select, Either};
+use embassy_futures::yield_now;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::Stack;
 use embassy_time::{Duration, Timer};
@@ -55,14 +58,18 @@ const INDEX: &[u8] = br##"<!doctype html>
 const w=document.getElementById('w'),m=document.getElementById('m');
 const sp=document.getElementById('sp'),sm=document.getElementById('sm');
 async function load(){
-  const j=await(await fetch('/api/status')).json();
-  w.ssid.value=j.ssid||'';
-  w.password.value=j.password||'';
-  const s=await(await fetch('/api/speech')).json();
-  sp.man_talk.value=s.man.talk; sp.man_lines.value=s.man.lines||'';
-  sp.dog_talk.value=s.dog.talk; sp.dog_lines.value=s.dog.lines||'';
-  sp.box_talk.value=s.box.talk; sp.box_lines.value=s.box.lines||'';
-  await loadRooms();
+  try{
+    const j=await(await fetch('/api/status')).json();
+    w.ssid.value=j.ssid||'';
+    w.password.value=j.password||'';
+  }catch(e){}
+  try{
+    const s=await(await fetch('/api/speech')).json();
+    sp.man_talk.value=s.man.talk; sp.man_lines.value=s.man.lines||'';
+    sp.dog_talk.value=s.dog.talk; sp.dog_lines.value=s.dog.lines||'';
+    sp.box_talk.value=s.box.talk; sp.box_lines.value=s.box.lines||'';
+  }catch(e){}
+  try{await loadRooms();}catch(e){}
 }
 load();
 document.getElementById('pw').onclick=()=>{
@@ -193,12 +200,16 @@ addBtn.onclick=()=>{
 };
 async function loadRooms(){
   const j=await(await fetch('/api/rooms')).json();
-  homePreview=await fetchImage(0);
   rooms=[];
   const n=Math.max(1,Math.min(3,j.count||1));
   for(let i=0;i<n;i++){
-    const preview=i?((await fetchImage(i))||homePreview):homePreview;
-    rooms.push({name:j['n'+i]||(i?('Room '+(i+1)):'Home'),preview,sm65:null,dirty:false,objectUrl:null});
+    rooms.push({name:j['n'+i]||(i?('Room '+(i+1)):'Home'),preview:'',sm65:null,dirty:false,objectUrl:null});
+  }
+  renderRooms();
+  homePreview=await fetchImage(0);
+  if(homePreview&&rooms[0]) rooms[0].preview=homePreview;
+  for(let i=1;i<rooms.length;i++){
+    rooms[i].preview=(await fetchImage(i))||homePreview;
   }
   renderRooms();
 }
@@ -229,21 +240,25 @@ document.getElementById('resetRooms').onclick=async()=>{
 
 /// Serve GET / , GET /api/status, POST /api/wifi, POST /api/speech, POST /api/config,
 /// GET/POST /api/rooms and GET/POST /api/room/N/image on port 80.
-#[embassy_executor::task(pool_size = 2)]
+#[embassy_executor::task(pool_size = 3)]
 pub async fn serve(stack: Stack<'static>, label: &'static str) -> ! {
-    let mut rx = [0u8; 4096];
+    let mut rx = [0u8; 2048];
     let mut tx = [0u8; 2048];
     loop {
+        wait_radio_wanted().await;
         let mut socket = TcpSocket::new(stack, &mut rx, &mut tx);
-        socket.set_timeout(Some(Duration::from_secs(30)));
+        socket.set_timeout(Some(Duration::from_secs(8)));
         if socket.accept(80).await.is_err() {
-            Timer::after_millis(50).await;
+            Timer::after_millis(20).await;
             continue;
         }
         println!("HTTP: {label} client");
         handle(&mut socket).await;
         socket.close();
-        let _ = socket.flush().await;
+        match select(socket.flush(), Timer::after_millis(250)).await {
+            Either::First(_) => {}
+            Either::Second(_) => socket.abort(),
+        }
     }
 }
 
@@ -260,6 +275,7 @@ async fn handle(socket: &mut TcpSocket<'_>) {
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/");
+    println!("HTTP: {method} {path}");
 
     if let Some(i) = parse_room_image_path(path) {
         match method {
@@ -478,10 +494,21 @@ async fn send(socket: &mut TcpSocket<'_>, status: &[u8], ctype: &[u8], body: &[u
 
 async fn write_all(socket: &mut TcpSocket<'_>, buf: &[u8]) {
     let mut off = 0;
+    let mut since_yield = 0;
     while off < buf.len() {
         match socket.write(&buf[off..]).await {
             Ok(0) | Err(_) => break,
-            Ok(n) => off += n,
+            Ok(n) => {
+                off += n;
+                since_yield += n;
+                if !radio_wanted() {
+                    break;
+                }
+                if since_yield >= 4096 {
+                    since_yield = 0;
+                    yield_now().await;
+                }
+            }
         }
     }
 }

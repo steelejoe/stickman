@@ -24,6 +24,11 @@ pub const DIRTY_MAX_W: u32 = 160;
 pub const DIRTY_MAX_H: u32 = 160;
 pub const DIRTY_BUF_LEN: usize = (DIRTY_MAX_W * DIRTY_MAX_H) as usize;
 
+/// Heap tile so [`crate::game::Game`] is not ~50 KiB on the embassy main stack.
+pub fn alloc_dirty_buf() -> alloc::boxed::Box<[Rgb565]> {
+    alloc::vec![Rgb565::BLACK; DIRTY_BUF_LEN].into_boxed_slice()
+}
+
 /// RAM draw target backed by a tightly packed RGB565 slice (row-major).
 pub struct SliceDisplay<'a> {
     buf: &'a mut [Rgb565],
@@ -227,7 +232,7 @@ where
 /// so a walk across them does not erase them.
 pub fn present_actor_frame<D>(
     display: &mut D,
-    dirty_buf: &mut [Rgb565; DIRTY_BUF_LEN],
+    dirty_buf: &mut [Rgb565],
     prev_rect: Option<Rectangle>,
     pose: &PoseScratch,
     new_rect: Rectangle,

@@ -8,7 +8,7 @@ use crate::collision::{
     self, align_to_support, apply_gravity, on_floor_polyline, CollisionKind, ContactMemory, World,
 };
 use crate::config::ConfigCmd;
-use crate::dirty::{self, DIRTY_BUF_LEN};
+use crate::dirty;
 use crate::room::{self, RoomId, RoomsUpdate};
 use crate::speech::SpeechConfig;
 use crate::stickman::eval;
@@ -63,8 +63,8 @@ pub struct Game {
     current_room: RoomId,
     /// Crate of each room the stickman has left (live crate stays on the fields).
     stashed_boxes: [Option<StashedBox>; room::MAX_ROOMS],
-    /// Scratch tile for flicker-free dirty presents (composed in RAM, one blit).
-    dirty_buf: [Rgb565; DIRTY_BUF_LEN],
+    /// Scratch tile for flicker-free dirty presents (heap; one blit).
+    dirty_buf: alloc::boxed::Box<[Rgb565]>,
     contacts: ContactMemory,
     /// Last tick the stickman was on a supporting edge (floor or model top).
     stick_grounded: bool,
@@ -123,7 +123,7 @@ impl Game {
             home_color: None,
             current_room: RoomId::Home,
             stashed_boxes: core::array::from_fn(|_| None),
-            dirty_buf: [Rgb565::BLACK; DIRTY_BUF_LEN],
+            dirty_buf: dirty::alloc_dirty_buf(),
             contacts: ContactMemory::new(),
             stick_grounded: true,
             box_grounded: true,
@@ -1197,6 +1197,24 @@ mod tests {
 
         assert!(!game.on_tap(x, y));
         assert!(!game.in_config_mode());
+    }
+
+    #[test]
+    fn leaving_config_after_adding_a_room_resumes_play() {
+        let mut game = Game::new();
+        let (x, y) = menu_xy(crate::menu::MenuButton::Config);
+        assert!(game.on_tap(x, y));
+        let cfg = crate::room::RoomsConfig::default();
+        game.apply_rooms(crate::room::RoomsUpdate {
+            count: 2,
+            names: cfg.names,
+            images: [assets::embedded_background(), None, None],
+        });
+        assert!(!game.on_tap(x, y));
+        assert!(!game.in_config_mode());
+        game.update(33);
+        assert_eq!(game.current_room(), crate::room::RoomId::Home);
+        assert_eq!(game.room_count(), 2);
     }
 
     #[test]

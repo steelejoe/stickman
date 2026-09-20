@@ -2,7 +2,7 @@
 
 use super::http;
 use crate::config::{write_ipv4, NetMode, WifiCreds, SOFTAP_IP, SOFTAP_SSID};
-use crate::net::{radio_wanted, set_status, set_stored_creds, RADIO_SIGNAL, STORED_CREDS};
+use crate::net::{radio_wanted, set_status, set_stored_creds, wait_radio_wanted, STORED_CREDS};
 use alloc::string::String;
 use embassy_futures::select::{select, Either};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
@@ -49,8 +49,17 @@ pub async fn run(
     let spawner = unsafe { embassy_executor::Spawner::for_current_executor().await };
     spawner.spawn(net_run(ap_runner)).ok();
     spawner.spawn(net_run_sta(sta_runner)).ok();
-    spawner.spawn(http::serve(ap_stack, "softap")).ok();
-    spawner.spawn(http::serve(sta_stack, "station")).ok();
+    if spawner.spawn(http::serve(ap_stack, "softap")).is_err() {
+        println!("HTTP: spawn softap failed");
+    }
+    // Browsers open extra TCP connections (favicon, preconnect). One station
+    // worker leaves /api/status queued and the config form stays empty.
+    if spawner.spawn(http::serve(sta_stack, "station")).is_err() {
+        println!("HTTP: spawn station failed");
+    }
+    if spawner.spawn(http::serve(sta_stack, "station")).is_err() {
+        println!("HTTP: spawn station failed");
+    }
     spawner.spawn(dhcp_server(ap_stack)).ok();
 
     set_stored_creds(initial).await;
@@ -99,6 +108,7 @@ pub async fn run(
             }
         }
         let _ = controller.disconnect_async().await;
+        Timer::after_millis(50).await;
         let _ = controller.stop_async().await;
         set_status(|s| {
             s.mode = NetMode::Off;
@@ -107,12 +117,6 @@ pub async fn run(
         })
         .await;
         println!("WiFi: radio stopped");
-    }
-}
-
-async fn wait_radio_wanted() {
-    while !radio_wanted() {
-        RADIO_SIGNAL.wait().await;
     }
 }
 

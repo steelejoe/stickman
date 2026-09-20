@@ -366,15 +366,29 @@ pub fn write_room_image(storage: &mut FlashStorage<'static>, i: usize, sm65: &[u
         println!("rooms: image too large");
         return;
     }
-    let mut slot = alloc::vec![0xFFu8; IMAGE_SLOT as usize];
-    slot[0..4].copy_from_slice(&IMAGE_MAGIC);
-    let n = sm65.len() as u32;
-    slot[4..8].copy_from_slice(&n.to_le_bytes());
-    slot[8..8 + sm65.len()].copy_from_slice(sm65);
-    match storage.write(offset, &slot) {
-        Ok(()) => println!("rooms: persisted image {i}"),
-        Err(e) => println!("rooms: image write failed: {e:?}"),
+    let mut buf = alloc::vec![0xFFu8; SECTOR as usize];
+    buf[0..4].copy_from_slice(&IMAGE_MAGIC);
+    buf[4..8].copy_from_slice(&(sm65.len() as u32).to_le_bytes());
+    let first = (SECTOR as usize - 8).min(sm65.len());
+    buf[8..8 + first].copy_from_slice(&sm65[..first]);
+    if let Err(e) = storage.write(offset, &buf) {
+        println!("rooms: image write failed: {e:?}");
+        return;
     }
+    let mut done = first;
+    let mut pos = offset + SECTOR;
+    while done < sm65.len() {
+        buf.fill(0xFF);
+        let n = (sm65.len() - done).min(SECTOR as usize);
+        buf[..n].copy_from_slice(&sm65[done..done + n]);
+        if let Err(e) = storage.write(pos, &buf) {
+            println!("rooms: image write failed: {e:?}");
+            return;
+        }
+        done += n;
+        pos += SECTOR;
+    }
+    println!("rooms: persisted image {i}");
 }
 
 pub async fn persist_rooms(
