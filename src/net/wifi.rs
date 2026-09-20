@@ -2,10 +2,11 @@
 
 use super::http;
 use crate::config::{write_ipv4, NetMode, WifiCreds, SOFTAP_IP, SOFTAP_SSID};
-use crate::net::{set_status, CREDS_CH, CREDS_SIGNAL};
+use crate::net::{radio_wanted, set_status, set_stored_creds, RADIO_SIGNAL, STORED_CREDS};
 use alloc::string::String;
-use embassy_net::{Config, Ipv4Address, Ipv4Cidr, Stack, StackResources, StaticConfigV4};
+use embassy_futures::select::{select, Either};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
+use embassy_net::{Config, Ipv4Address, Ipv4Cidr, Stack, StackResources, StaticConfigV4};
 use embassy_time::{Duration, Timer};
 use esp_println::println;
 use esp_radio::wifi::{
@@ -15,7 +16,7 @@ use static_cell::StaticCell;
 
 const AP_IP: Ipv4Address = Ipv4Address::new(192, 168, 4, 1);
 
-/// Bring up SoftAP always, plus STA when credentials exist.
+/// Station-only when credentials exist (home LAN DHCP). SoftAP only as setup fallback.
 #[embassy_executor::task]
 pub async fn run(
     mut controller: WifiController<'static>,
@@ -26,7 +27,7 @@ pub async fn run(
     let ap_cfg = AccessPointConfig::default().with_ssid(String::from(SOFTAP_SSID));
 
     static AP_RES: StaticCell<StackResources<4>> = StaticCell::new();
-    static STA_RES: StaticCell<StackResources<4>> = StaticCell::new();
+    static STA_RES: StaticCell<StackResources<8>> = StaticCell::new();
 
     let (ap_stack, ap_runner) = embassy_net::new(
         interfaces.ap,
@@ -52,26 +53,90 @@ pub async fn run(
     spawner.spawn(http::serve(sta_stack, "station")).ok();
     spawner.spawn(dhcp_server(ap_stack)).ok();
 
-    let mut creds = initial;
+    set_stored_creds(initial).await;
     loop {
-        apply_mode(&mut controller, creds.as_ref(), &ap_cfg).await;
-        watch_links(ap_stack, sta_stack, creds.as_ref()).await;
-
-        // Wait until USB drops a new wifi.json, then reconfigure.
-        CREDS_SIGNAL.wait().await;
-        while let Ok(next) = CREDS_CH.try_receive() {
-            println!("WiFi: new credentials SSID={}", next.ssid);
-            creds = Some(next);
+        wait_radio_wanted().await;
+        let creds = STORED_CREDS.lock().await.clone();
+        if !start_radio(&mut controller, creds.as_ref(), &ap_cfg).await {
+            continue;
         }
+        if creds.is_some() {
+            match select(
+                controller.connect_async(),
+                watch_links(ap_stack, sta_stack, creds.as_ref()),
+            )
+            .await
+            {
+                Either::First(Ok(())) => {
+                    println!("WiFi: station associated; waiting for DHCP");
+                    watch_links(ap_stack, sta_stack, creds.as_ref()).await;
+                }
+                Either::First(Err(e)) => {
+                    println!("WiFi: station join failed ({e:?})");
+                    set_status(|s| {
+                        s.configured = true;
+                        s.mode = NetMode::Station;
+                        s.last_error.clear();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut s.last_error,
+                            format_args!("STA failed: {e:?} (5 GHz? use 2.4 GHz)"),
+                        );
+                    })
+                    .await;
+                    watch_links(ap_stack, sta_stack, creds.as_ref()).await;
+                }
+                Either::Second(()) => {}
+            }
+        } else {
+            match select(
+                controller.wait_for_event(WifiEvent::ApStart),
+                watch_links(ap_stack, sta_stack, creds.as_ref()),
+            )
+            .await
+            {
+                Either::First(_) => watch_links(ap_stack, sta_stack, creds.as_ref()).await,
+                Either::Second(()) => {}
+            }
+        }
+        let _ = controller.disconnect_async().await;
         let _ = controller.stop_async().await;
+        set_status(|s| {
+            s.mode = NetMode::Off;
+            s.ip.clear();
+            s.last_error.clear();
+        })
+        .await;
+        println!("WiFi: radio stopped");
     }
 }
 
-async fn apply_mode(
+async fn wait_radio_wanted() {
+    while !radio_wanted() {
+        RADIO_SIGNAL.wait().await;
+    }
+}
+
+async fn start_radio(
     controller: &mut WifiController<'static>,
     creds: Option<&WifiCreds>,
     ap_cfg: &AccessPointConfig,
-) {
+) -> bool {
+    set_status(|s| {
+        s.configured = creds.is_some();
+        s.ssid.clear();
+        if let Some(c) = creds {
+            let _ = s.ssid.push_str(c.ssid.as_str());
+        }
+        s.ip.clear();
+        s.mode = if creds.is_some() {
+            NetMode::Station
+        } else {
+            NetMode::SoftAp
+        };
+        s.last_error.clear();
+    })
+    .await;
+
     let mode = if let Some(c) = creds {
         let mut client = ClientConfig::default()
             .with_ssid(String::from(c.ssid.as_str()))
@@ -79,8 +144,8 @@ async fn apply_mode(
         if c.password.is_empty() {
             client = client.with_auth_method(AuthMethod::None);
         }
-        println!("WiFi: AP+STA (2.4 GHz) SSID={}", c.ssid);
-        ModeConfig::ApSta(client, ap_cfg.clone())
+        println!("WiFi: station (2.4 GHz) SSID={}", c.ssid);
+        ModeConfig::Client(client)
     } else {
         println!("WiFi: SoftAP only ({SOFTAP_SSID} / http://{SOFTAP_IP}/)");
         ModeConfig::AccessPoint(ap_cfg.clone())
@@ -93,84 +158,80 @@ async fn apply_mode(
         })
         .await;
         println!("WiFi: set_config failed: {e:?}");
-        return;
+        return false;
     }
     if let Err(e) = controller.start_async().await {
         println!("WiFi: start failed: {e:?}");
-        return;
+        return false;
     }
-    if creds.is_some() {
-        match controller.connect_async().await {
-            Ok(()) => println!("WiFi: station associated"),
-            Err(e) => {
-                println!("WiFi: station join failed ({e:?}); SoftAP still up");
-                set_status(|s| {
-                    s.mode = NetMode::SoftAp;
-                    s.ssid.clear();
-                    let _ = s.ssid.push_str(SOFTAP_SSID);
-                    s.ip.clear();
-                    let _ = s.ip.push_str(SOFTAP_IP);
-                    s.last_error.clear();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut s.last_error,
-                        format_args!("STA failed: {e:?} (5 GHz? use 2.4 GHz)"),
-                    );
-                })
-                .await;
-            }
-        }
+    true
+}
+
+fn sta_dhcp_octets(sta: Stack<'static>) -> Option<[u8; 4]> {
+    let oct = sta.config_v4()?.address.address().octets();
+    if oct == [0, 0, 0, 0] {
+        None
     } else {
-        set_status(|s| {
-            s.mode = NetMode::SoftAp;
-            s.ssid.clear();
-            let _ = s.ssid.push_str(SOFTAP_SSID);
-            s.ip.clear();
-            let _ = s.ip.push_str(SOFTAP_IP);
-            s.last_error.clear();
-        })
-        .await;
+        Some(oct)
     }
-    let _ = controller.wait_for_event(WifiEvent::ApStart);
 }
 
 async fn watch_links(ap: Stack<'static>, sta: Stack<'static>, creds: Option<&WifiCreds>) {
-    // Refresh status while waiting for new credentials (or a few seconds after connect).
-    for _ in 0..20 {
-        if CREDS_SIGNAL.signaled() {
+    let mut last_oct = [0u8; 4];
+    loop {
+        if !radio_wanted() {
             break;
         }
-        if let Some(cfg) = sta.config_v4() {
-            let oct = cfg.address.address().octets();
-            set_status(|s| {
-                s.mode = NetMode::Station;
-                s.ssid.clear();
-                if let Some(c) = creds {
-                    let _ = s.ssid.push_str(c.ssid.as_str());
+        if creds.is_some() {
+            if let Some(oct) = sta_dhcp_octets(sta) {
+                if oct != last_oct {
+                    last_oct = oct;
+                    println!(
+                        "WiFi: station IP {}.{}.{}.{}",
+                        oct[0], oct[1], oct[2], oct[3]
+                    );
+                    set_status(|s| {
+                        s.configured = true;
+                        s.mode = NetMode::Station;
+                        s.ssid.clear();
+                        if let Some(c) = creds {
+                            let _ = s.ssid.push_str(c.ssid.as_str());
+                        }
+                        write_ipv4(&mut s.ip, oct);
+                        s.last_error.clear();
+                    })
+                    .await;
                 }
-                write_ipv4(&mut s.ip, oct);
-                s.last_error.clear();
-            })
-            .await;
+            } else if last_oct == [0u8; 4] {
+                set_status(|s| {
+                    s.configured = true;
+                    s.mode = NetMode::Station;
+                    s.ssid.clear();
+                    if let Some(c) = creds {
+                        let _ = s.ssid.push_str(c.ssid.as_str());
+                    }
+                })
+                .await;
+            }
         } else if ap.config_v4().is_some() {
             set_status(|s| {
-                if s.mode == NetMode::Off {
-                    s.mode = NetMode::SoftAp;
-                }
-                if s.ssid.is_empty() {
-                    let _ = s.ssid.push_str(SOFTAP_SSID);
-                }
-                if s.ip.is_empty() {
-                    let _ = s.ip.push_str(SOFTAP_IP);
-                }
+                s.configured = false;
+                s.mode = NetMode::SoftAp;
+                s.ssid.clear();
+                let _ = s.ssid.push_str(SOFTAP_SSID);
+                s.ip.clear();
+                let _ = s.ip.push_str(SOFTAP_IP);
             })
             .await;
         }
-        Timer::after(Duration::from_millis(500)).await;
+        Timer::after(Duration::from_millis(100)).await;
     }
 }
 
 #[embassy_executor::task]
-async fn net_run(mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>) -> ! {
+async fn net_run(
+    mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>,
+) -> ! {
     runner.run().await
 }
 
@@ -238,10 +299,8 @@ async fn dhcp_server(stack: Stack<'static>) -> ! {
         o += 1;
         let _ = xid;
         let _ = chaddr;
-        let dest = embassy_net::IpEndpoint::new(
-            embassy_net::IpAddress::Ipv4(Ipv4Address::BROADCAST),
-            68,
-        );
+        let dest =
+            embassy_net::IpEndpoint::new(embassy_net::IpAddress::Ipv4(Ipv4Address::BROADCAST), 68);
         let _ = sock.send_to(&reply[..o], dest).await;
         let _ = meta;
     }

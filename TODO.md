@@ -13,12 +13,14 @@ And the figure can be positioned in the middleground image.
 **Q**: how can I represent this in the bitmaps?
 
 Done so far:
+
 - `make import` / `scripts/import-image.py` converts local files → `assets/<name>.png` (sim) + `.rgb565` (device)
 - Formats: PNG, JPEG, GIF (first frame), WebP, SVG
 - Three depth layers (`LayerId`: background / middle / foreground); stickman draws on middle or foreground
 - Layer-0 background image embed + runtime sim load; dirty-rect restore under the figure
 
 TODOs:
+
 - [x] Build a simulator to show in a window on my desktop (`make sim`)
 - [x] Add import-image tooling for local files (`make import IMAGE=...`)
 - [x] Add PNG support
@@ -28,7 +30,7 @@ TODOs:
 - [x] Add 3 depth layers (background / middle / foreground)
 - [x] Background image on layer 0 (import + draw / dirty restore)
 - [ ] Middleground / foreground *images* (not just stickman on those layers)
-- [ ] Add support for importing images from the web / URL
+- [x] Add support for importing images from the web / URL
 - [ ] Add support for importing images from a base64 encoded string
 - [ ] Richer CLI than `make import` (optional subcommands, URL/base64 inputs)
 
@@ -41,6 +43,7 @@ I am not sure how I want to handle behavior attachment. Maybe they can be generi
 Probably not though.
 
 Done so far:
+
 - Table-driven behaviors (`behaviors!` in `plugin.rs`: clip + locomotion)
 - Cycle order: walk → idle → jump → jump-forward → crouch → crawl → begging → knockback → tumble
   - **Walking** — gait + edge bounce
@@ -56,6 +59,7 @@ Done so far:
 - Shared `Game` loop with dirty-tile presents (device flicker-free)
 
 TODOs:
+
 - [x] Add behavior system to the infrastructure
 - [x] Walking / idle / jump / jump-forward / crouch / crawl / begging / knockback / tumble behaviors
 - [x] Species + clip IR (bones in flash, clips key angles; behaviors direct world logic)
@@ -75,8 +79,8 @@ TODOs:
 - [x] Raised baseline - walk/land on the top of models (e.g. the box); floor is the default
 - [x] Gravity - step off a lid → `Falling` event and pull down to the default floor
 - [x] Rooms (first slice) — two rooms: existing home + solid blue to the right; walk off a connecting edge to enter; dog stays paused in home; each room has its own floor box
-- [ ] More rooms / richer room content
-- [ ] Add support for configuration (file over usb, wifi web site, ???)
+- [x] More rooms / richer room content
+- [x] Add support for configuration (file over usb, wifi web site, ???)
   - Add things e.g .images converted to right format
   - Remove things
   - Change background
@@ -89,6 +93,7 @@ TODOs:
 Carried over from the completed build-rescue work. Device build/flash is working; these are follow-ups.
 
 TODOs:
+
 - [ ] Add `scripts/check-env.sh` to verify `cargo`, `rustup`, `espflash`, and the ESP toolchain resolve
 - [ ] Add CI for device (`make device`) and simulation (`make build-sim`) builds
 - [ ] Move display init out of `src/app.rs` into `src/hardware/display.rs` (currently a stub)

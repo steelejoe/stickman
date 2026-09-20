@@ -1,8 +1,9 @@
 //! Box behaviors: idle, slide, roll, shudder, talking.
 
-use crate::behavior::dialog::{self, BOX_LINES};
+use crate::behavior::dialog::BOX_LINES;
 use crate::behavior::event::{Event, EventCtx, Rng32};
 use crate::collision::CollisionKind;
+use crate::speech::{Line, PhraseBank};
 use crate::stickman::ir::{Actor, ClipId};
 
 const TALK_MIN_MS: u32 = 1500;
@@ -29,13 +30,14 @@ impl BoxBehaviorId {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct BoxBrain {
     current: BoxBehaviorId,
     rng: Rng32,
     talk_remain_ms: u32,
     bubble_left: bool,
-    phrase: &'static str,
+    phrase: Line,
+    phrases: PhraseBank,
 }
 
 impl BoxBrain {
@@ -49,7 +51,8 @@ impl BoxBrain {
             rng: Rng32::new(seed),
             talk_remain_ms: 0,
             bubble_left: false,
-            phrase: "",
+            phrase: Line::new(),
+            phrases: PhraseBank::r#box(),
         }
     }
 
@@ -65,17 +68,27 @@ impl BoxBrain {
         self.bubble_left
     }
 
-    pub fn talk_phrase(&self) -> Option<&'static str> {
+    pub fn talk_phrase(&self) -> Option<&str> {
         if self.is_talking() && !self.phrase.is_empty() {
-            Some(self.phrase)
+            Some(self.phrase.as_str())
         } else {
             None
         }
     }
 
+    pub fn set_phrases(&mut self, phrases: PhraseBank) {
+        self.phrases = phrases;
+    }
+
     pub fn on_event(&mut self, actor: &mut Actor, event: Event, ctx: EventCtx, entropy: u32) {
         self.rng.mix(entropy);
+        if self.try_talk(actor, event) {
+            return;
+        }
         let next = self.rng.pick(box_weights(self.current, event));
+        if next == BoxBehaviorId::Talking {
+            return;
+        }
         if next != self.current {
             self.switch(actor, next, ctx);
         } else if matches!(next, BoxBehaviorId::Sliding | BoxBehaviorId::Rolling)
@@ -86,6 +99,21 @@ impl BoxBrain {
         }
     }
 
+    fn try_talk(&mut self, actor: &mut Actor, event: Event) -> bool {
+        if self.current == BoxBehaviorId::Talking {
+            return false;
+        }
+        if self.phrases.talk_pct == 0 {
+            return false;
+        }
+        let _ = event;
+        if self.rng.next_u32() % 100 >= u32::from(self.phrases.talk_pct) {
+            return false;
+        }
+        self.switch(actor, BoxBehaviorId::Talking, EventCtx::default());
+        true
+    }
+
     fn switch(&mut self, actor: &mut Actor, id: BoxBehaviorId, ctx: EventCtx) {
         self.current = id;
         if matches!(id, BoxBehaviorId::Sliding | BoxBehaviorId::Rolling) {
@@ -93,7 +121,7 @@ impl BoxBrain {
         }
         if id == BoxBehaviorId::Talking {
             self.bubble_left = self.rng.next_u32() & 1 == 1;
-            self.phrase = dialog::pick_line(&mut self.rng, BOX_LINES);
+            self.phrase = self.phrases.pick(&mut self.rng, BOX_LINES);
             let span = TALK_MAX_MS - TALK_MIN_MS + 1;
             self.talk_remain_ms = TALK_MIN_MS + self.rng.next_u32() % span;
         } else {

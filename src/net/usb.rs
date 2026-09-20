@@ -6,7 +6,7 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::{Driver, EndpointIn, EndpointOut};
 use embassy_usb::msos::{self, windows_version};
 use embassy_usb::{Builder, Config, Handler};
-use esp_hal::otg_fs::{Usb, asynch};
+use esp_hal::otg_fs::{asynch, Usb};
 use esp_hal::peripherals::{GPIO19, GPIO20, USB0};
 use esp_println::println;
 use esp_storage::FlashStorage;
@@ -79,9 +79,7 @@ pub async fn run(
     }
 }
 
-fn alloc_msc<'d, D: Driver<'d>>(
-    builder: &mut Builder<'d, D>,
-) -> (D::EndpointOut, D::EndpointIn) {
+fn alloc_msc<'d, D: Driver<'d>>(builder: &mut Builder<'d, D>) -> (D::EndpointOut, D::EndpointIn) {
     let mut func = builder.function(0x08, 0x06, 0x50);
     let mut iface = func.interface();
     let mut alt = iface.alt_setting(0x08, 0x06, 0x50, None);

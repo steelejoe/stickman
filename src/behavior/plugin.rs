@@ -9,9 +9,10 @@
 //! Add a behavior with one row in [`behaviors!`]. Unique update code is a
 //! [`Loco`] variant, not a new file.
 
-use crate::behavior::dialog::{self, DOG_LINES, STICKMAN_LINES};
+use crate::behavior::dialog::{DOG_LINES, STICKMAN_LINES};
 use crate::behavior::event::{Event, EventCtx, Rng32};
 use crate::collision::{self, CollisionKind};
+use crate::speech::{Line, PhraseBank};
 use crate::stickman::geometry::{self, floor_y, JUMP_FORWARD_RISE};
 use crate::stickman::ir::{Actor, ClipId, LoopMode};
 use crate::stickman::library;
@@ -172,7 +173,8 @@ pub struct BehaviorManager {
     /// Preferred speech-bubble side while [`BehaviorId::Talking`].
     bubble_left: bool,
     /// Line shown while talking.
-    phrase: &'static str,
+    phrase: Line,
+    phrases: PhraseBank,
 }
 
 impl BehaviorManager {
@@ -197,7 +199,11 @@ impl BehaviorManager {
             switch_remain_ms: AUTO_SWITCH_MAX_MS,
             chain: None,
             bubble_left: false,
-            phrase: "",
+            phrase: Line::new(),
+            phrases: match kind {
+                FigureKind::Stickman => PhraseBank::man(),
+                FigureKind::Dog => PhraseBank::dog(),
+            },
         };
         this.roll_auto_switch();
         this
@@ -218,13 +224,6 @@ impl BehaviorManager {
         }
     }
 
-    fn lines(&self) -> &'static [&'static str] {
-        match self.kind {
-            FigureKind::Stickman => STICKMAN_LINES,
-            FigureKind::Dog => DOG_LINES,
-        }
-    }
-
     pub fn is_talking(&self) -> bool {
         self.current == BehaviorId::Talking
     }
@@ -235,12 +234,16 @@ impl BehaviorManager {
     }
 
     /// Spoken line while [`BehaviorId::Talking`].
-    pub fn talk_phrase(&self) -> Option<&'static str> {
+    pub fn talk_phrase(&self) -> Option<&str> {
         if self.is_talking() && !self.phrase.is_empty() {
-            Some(self.phrase)
+            Some(self.phrase.as_str())
         } else {
             None
         }
+    }
+
+    pub fn set_phrases(&mut self, phrases: PhraseBank) {
+        self.phrases = phrases;
     }
 
     /// True while a jump loco is playing (impulse already applied).
@@ -254,8 +257,11 @@ impl BehaviorManager {
         self.timer_ms = 0;
         if id == BehaviorId::Talking {
             self.bubble_left = self.rng.next_u32() & 1 == 1;
-            let lines = self.lines();
-            self.phrase = dialog::pick_line(&mut self.rng, lines);
+            let fallback = match self.kind {
+                FigureKind::Stickman => STICKMAN_LINES,
+                FigureKind::Dog => DOG_LINES,
+            };
+            self.phrase = self.phrases.pick(&mut self.rng, fallback);
         }
         if id == BehaviorId::FlipFacing {
             // Turn around: reverse any travel vector, then face along it.
@@ -370,11 +376,35 @@ impl BehaviorManager {
             }
         }
         self.rng.mix(entropy);
+        if self.try_talk(actor, event) {
+            return false;
+        }
         let steps = self
             .rng
             .pick(figure_weights(self.kind, self.current, event, ctx));
         self.begin_chain(actor, steps);
         false
+    }
+
+    fn try_talk(&mut self, actor: &mut Actor, event: Event) -> bool {
+        if self.current == BehaviorId::Talking {
+            return false;
+        }
+        if !matches!(event, Event::Tap | Event::BehaviorFinished) {
+            return false;
+        }
+        if self.phrases.talk_pct == 0 {
+            return false;
+        }
+        if self.rng.next_u32() % 100 >= u32::from(self.phrases.talk_pct) {
+            return false;
+        }
+        self.switch(
+            actor,
+            BehaviorId::Talking,
+            self.index_of(BehaviorId::Talking),
+        );
+        true
     }
 
     fn take_chain_step(&mut self) -> Option<BehaviorId> {
@@ -391,6 +421,9 @@ impl BehaviorManager {
     fn begin_chain(&mut self, actor: &mut Actor, steps: &'static [BehaviorId]) {
         debug_assert!(!steps.is_empty());
         let first = steps[0];
+        if first == BehaviorId::Talking {
+            return;
+        }
         let retrigger = matches!(first.loco(), Loco::Jump | Loco::JumpForward);
         if first != self.current || steps.len() > 1 || retrigger {
             self.switch(actor, first, self.index_of(first));

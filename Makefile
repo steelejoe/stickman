@@ -14,9 +14,12 @@ SIM_TARGET ?= x86_64-unknown-linux-gnu
 DEVICE_TARGET ?= xtensa-esp32s3-none-elf
 PYTHON ?= python3
 
-# Display size used by import scaling (landscape AMOLED).
+# Display / room size used by import scaling (landscape AMOLED).
+# Backgrounds fit the room, not the 56px menu strip (see src/menu.rs).
 DISPLAY_WIDTH ?= 536
 DISPLAY_HEIGHT ?= 240
+ROOM_LEFT ?= 56
+ROOM_WIDTH ?= $(shell echo $$(($(DISPLAY_WIDTH) - $(ROOM_LEFT))))
 ASSETS_DIR ?= assets
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
@@ -65,23 +68,27 @@ flash:
 		-Z build-std=core,alloc
 
 # Convert IMAGE into simulator PNG + device RGB565 under OUTDIR (default: assets).
-# Default: fit inside DISPLAY_WIDTH×DISPLAY_HEIGHT, aspect preserved.
-# STRETCH_X=1: fit height, then stretch width to fill the display.
+# Default: fit inside the room (ROOM_WIDTH×DISPLAY_HEIGHT), trim transparent
+# padding, and record the display origin so the menu strip is not stored.
+# STRETCH_X=1: fit height, then stretch width to fill the room.
+# FULL_DISPLAY=1: fit the whole 536×240 panel instead of the room.
 #
 #   make import IMAGE=photos/sky.jpg NAME=background   # layer-0 backdrop
 #   make import IMAGE=icon.svg NAME=foreground
 #   make import IMAGE=bg.png STRETCH_X=1
 import:
 	@if [ -z "$(IMAGE)" ]; then \
-		echo "Usage: make import IMAGE=path/to/image.[png|jpg|jpeg|gif|webp|svg] [NAME=basename] [OUTDIR=assets] [STRETCH_X=1]"; \
+		echo "Usage: make import IMAGE=path/to/image.[png|jpg|jpeg|gif|webp|svg] [NAME=basename] [OUTDIR=assets] [STRETCH_X=1] [FULL_DISPLAY=1]"; \
 		exit 1; \
 	fi
 	$(PYTHON) scripts/import-image.py "$(IMAGE)" \
-		--width $(DISPLAY_WIDTH) \
+		--width $(ROOM_WIDTH) \
 		--height $(DISPLAY_HEIGHT) \
+		--origin-x $(ROOM_LEFT) \
 		--out-dir "$(or $(OUTDIR),$(ASSETS_DIR))" \
 		$(if $(NAME),--name "$(NAME)",) \
-		$(if $(filter 1 yes true YES TRUE,$(STRETCH_X)),--stretch-x,)
+		$(if $(filter 1 yes true YES TRUE,$(STRETCH_X)),--stretch-x,) \
+		$(if $(filter 1 yes true YES TRUE,$(FULL_DISPLAY)),--full-display,)
 
 clean:
 	$(CARGO) clean

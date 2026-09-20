@@ -5,11 +5,11 @@
 //!   Left mouse click  → touch tap (entity table, or random stickman if empty)
 //!   Escape / close    → quit
 //!
-//! Background: loads `assets/background.png` (preferred) or
-//! `assets/background.rgb565` at runtime from the project tree.
+//! Background: loads `assets/background.rgb565` (preferred, has origin) or
+//! `assets/background.png` at runtime from the project tree.
 
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::geometry::{OriginDimensions, Size};
+use embedded_graphics::geometry::{OriginDimensions, Point, Size};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use minifb::{Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use stickman::assets::{rgb888_to_rgb565_be, Rgb565Image};
 use stickman::game::Game;
+use stickman::menu::{self, ROOM_LEFT};
 use stickman::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 
 const FRAME_MS: u64 = 33;
@@ -152,8 +153,16 @@ fn load_background_png(path: &Path) -> Result<Rgb565Image<'static>, String> {
         other => return Err(format!("unsupported PNG color type: {other:?}")),
     }
 
-    Rgb565Image::from_pixels(width, height, leak_pixels(pixels))
-        .ok_or_else(|| format!("invalid PNG dimensions in {}", path.display()))
+    let img = Rgb565Image::from_pixels(width, height, leak_pixels(pixels))
+        .ok_or_else(|| format!("invalid PNG dimensions in {}", path.display()))?;
+    // PNG has no origin; room-sized files sit against the menu.
+    // Prefer the SM65 asset when both exist.
+    let img = if width as u32 == menu::room_width() && height as u32 == DISPLAY_HEIGHT {
+        img.with_origin(Point::new(ROOM_LEFT, 0))
+    } else {
+        img
+    };
+    Ok(img)
 }
 
 fn load_background_rgb565(path: &Path) -> Result<Rgb565Image<'static>, String> {
@@ -163,33 +172,37 @@ fn load_background_rgb565(path: &Path) -> Result<Rgb565Image<'static>, String> {
 }
 
 fn load_sim_background() -> Option<Rgb565Image<'static>> {
-    if let Some(path) = first_existing("background.png") {
-        match load_background_png(&path) {
-            Ok(img) => {
-                println!(
-                    "Background: loaded {} ({}x{})",
-                    path.display(),
-                    img.width,
-                    img.height
-                );
-                return Some(img);
-            }
-            Err(e) => println!("Background: failed to load PNG ({e})"),
-        }
-    }
-
     if let Some(path) = first_existing("background.rgb565") {
         match load_background_rgb565(&path) {
             Ok(img) => {
                 println!(
-                    "Background: loaded {} ({}x{})",
+                    "Background: loaded {} ({}x{} @ {},{})",
                     path.display(),
                     img.width,
-                    img.height
+                    img.height,
+                    img.origin.x,
+                    img.origin.y
                 );
                 return Some(img);
             }
             Err(e) => println!("Background: failed to load RGB565 ({e})"),
+        }
+    }
+
+    if let Some(path) = first_existing("background.png") {
+        match load_background_png(&path) {
+            Ok(img) => {
+                println!(
+                    "Background: loaded {} ({}x{} @ {},{})",
+                    path.display(),
+                    img.width,
+                    img.height,
+                    img.origin.x,
+                    img.origin.y
+                );
+                return Some(img);
+            }
+            Err(e) => println!("Background: failed to load PNG ({e})"),
         }
     }
 
@@ -235,7 +248,7 @@ fn main() {
 
     println!("Stickman simulation running.");
     println!("  Spacebar         → cycle behavior (BOOT button)");
-    println!("  Left 30px strip  → CFG / BOX / DOG / MAN");
+    println!("  Left 56px strip  → CFG / BOX / DOG / MAN");
     println!("  Room click       → ignored (use the menu)");
     println!("  Auto             → random other behavior within 5s (input resets the timer)");
     println!("  Escape / close   → quit");
@@ -256,8 +269,20 @@ fn main() {
         if mouse && !prev_mouse {
             if let Some((x, y)) = window.get_mouse_pos(MouseMode::Clamp) {
                 // `get_mouse_pos` is already in buffer / display pixels.
-                if game.on_tap(x as u32, y as u32) {
-                    println!("Config: Wi-Fi enable is device-only");
+                let x = x as u32;
+                let y = y as u32;
+                match stickman::menu::hit_button(x, y) {
+                    Some(btn) => {
+                        println!("Menu: {} at ({x}, {y})", btn.label());
+                        if game.on_tap(x, y) {
+                            println!(
+                                "Config: paused — configuration needed (Wi-Fi is device-only)"
+                            );
+                        } else if btn == stickman::menu::MenuButton::Config {
+                            println!("Config: resume room");
+                        }
+                    }
+                    None => println!("Menu: miss at ({x}, {y})"),
                 }
             }
         }

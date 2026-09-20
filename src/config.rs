@@ -39,23 +39,48 @@ impl WifiCreds {
     }
 }
 
-#[derive(Deserialize)]
-struct WifiFile<'a> {
-    ssid: &'a str,
-    #[serde(default)]
-    password: &'a str,
-}
-
 /// Parse the USB `wifi.json` body. 2.4 GHz only — 5 GHz APs will not join.
 pub fn parse_wifi_json(bytes: &[u8]) -> Result<WifiCreds, ParseError> {
+    match parse_wifi_action(bytes)? {
+        WifiAction::Save(creds) => Ok(creds),
+        WifiAction::Reset => Err(ParseError::MissingSsid),
+    }
+}
+
+/// Save station credentials or wipe them (`{"reset":true}`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WifiAction {
+    Save(WifiCreds),
+    Reset,
+}
+
+#[derive(Deserialize)]
+struct WifiPost<'a> {
+    #[serde(default)]
+    ssid: Option<&'a str>,
+    #[serde(default)]
+    password: Option<&'a str>,
+    #[serde(default)]
+    reset: Option<bool>,
+}
+
+/// Parse `POST /api/wifi` JSON.
+pub fn parse_wifi_action(bytes: &[u8]) -> Result<WifiAction, ParseError> {
     let text = core::str::from_utf8(bytes).map_err(|_| ParseError::InvalidUtf8)?;
     let text = text.trim_start_matches(['\u{feff}', '\0']).trim();
     if text.is_empty() {
         return Err(ParseError::Empty);
     }
-    let (file, _): (WifiFile<'_>, _) =
+    let (file, _): (WifiPost<'_>, _) =
         serde_json_core::from_str(text).map_err(|_| ParseError::InvalidJson)?;
-    WifiCreds::new(file.ssid.trim(), file.password).ok_or(ParseError::MissingSsid)
+    if file.reset == Some(true) {
+        return Ok(WifiAction::Reset);
+    }
+    let ssid = file.ssid.map(str::trim).unwrap_or("");
+    let password = file.password.unwrap_or("");
+    WifiCreds::new(ssid, password)
+        .map(WifiAction::Save)
+        .ok_or(ParseError::MissingSsid)
 }
 
 /// Command from the website to the game core.
@@ -83,6 +108,8 @@ pub struct NetStatus {
     pub ssid: String<SSID_MAX>,
     pub ip: String<16>,
     pub last_error: String<80>,
+    /// True when station credentials are loaded (SSID + password).
+    pub configured: bool,
 }
 
 impl Default for NetStatus {
@@ -92,6 +119,7 @@ impl Default for NetStatus {
             ssid: String::new(),
             ip: String::new(),
             last_error: String::new(),
+            configured: false,
         }
     }
 }
@@ -213,6 +241,25 @@ mod tests {
     #[test]
     fn rejects_empty_ssid() {
         assert!(parse_wifi_json(br#"{"ssid":""}"#).is_err());
+    }
+
+    #[test]
+    fn parses_wifi_reset() {
+        assert_eq!(
+            parse_wifi_action(br#"{"reset":true}"#).unwrap(),
+            WifiAction::Reset
+        );
+    }
+
+    #[test]
+    fn parses_wifi_save() {
+        let WifiAction::Save(creds) =
+            parse_wifi_action(br#"{"ssid":"HomeNet","password":"secret"}"#).unwrap()
+        else {
+            panic!("expected save");
+        };
+        assert_eq!(creds.ssid.as_str(), "HomeNet");
+        assert_eq!(creds.password.as_str(), "secret");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{OriginDimensions, Point, Size};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::Rectangle;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, RoundedRectangle};
 
 /// Max dirty tile stored in [`crate::game::Game`] (≈50 KiB).
 /// Wide enough for sword-stab lunge unions without falling back to
@@ -134,12 +134,32 @@ pub fn draw_background<D>(display: &mut D, background: Backdrop) -> Result<(), D
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    match background {
-        Backdrop::Color(c) => display.fill_solid(&menu::room_rect(), c)?,
-        Backdrop::Image(img) => img.blit_rect(display, menu::room_rect())?,
-    }
+    paint_room_backdrop(display, background)?;
     render::draw_floor(display)?;
+    menu::mask_room_corners(display)?;
     menu::draw(display)
+}
+
+fn paint_room_backdrop<D>(display: &mut D, background: Backdrop) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let room = menu::room_rect();
+    match background {
+        Backdrop::Color(c) => {
+            display.fill_solid(&room, Rgb565::BLACK)?;
+            RoundedRectangle::with_equal_corners(room, Size::new(menu::CORNER, menu::CORNER))
+                .into_styled(PrimitiveStyle::with_fill(c))
+                .draw(display)
+        }
+        Backdrop::Image(img) => {
+            if img.display_bounds().intersection(&room) != room {
+                display.fill_solid(&room, Rgb565::BLACK)?;
+            }
+            img.blit_rect(display, room)?;
+            menu::mask_room_corners(display)
+        }
+    }
 }
 
 fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Backdrop) {
@@ -155,6 +175,9 @@ fn fill_layer0(buf: &mut [Rgb565], width: u32, area: Rectangle, bg: Backdrop) {
             let mut color = bg.pixel(x, y);
             if y == geometry::floor_y_at_in(floor, x) {
                 color = Rgb565::WHITE;
+            }
+            if !menu::room_contains(x, y) {
+                color = Rgb565::BLACK;
             }
             buf[row * w + col] = color;
         }
@@ -239,6 +262,7 @@ where
                 Backdrop::Image(img) => img.blit_rect(display, prev_rect)?,
                 Backdrop::Color(c) => display.fill_solid(&prev_rect, c)?,
             }
+            menu::mask_room_corners(display)?;
         }
     }
     if new_rect.size.width <= DIRTY_MAX_W && new_rect.size.height <= DIRTY_MAX_H {
@@ -247,4 +271,29 @@ where
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::menu::{self, ROOM_LEFT};
+
+    #[test]
+    fn room_corners_are_black_behind_the_rounded_face() {
+        const W: u32 = DISPLAY_WIDTH;
+        const H: u32 = DISPLAY_HEIGHT;
+        let mut buf = [Rgb565::RED; (W * H) as usize];
+        let mut display = SliceDisplay::new(&mut buf, W, H);
+        draw_background(&mut display, Backdrop::Color(Rgb565::GREEN)).unwrap();
+
+        let at = |x: i32, y: i32| buf[(y as u32 * W + x as u32) as usize];
+        assert_eq!(at(ROOM_LEFT, 0), Rgb565::BLACK);
+        assert_eq!(at(W as i32 - 1, 0), Rgb565::BLACK);
+        assert_eq!(at(ROOM_LEFT, H as i32 - 1), Rgb565::BLACK);
+        assert_eq!(at(W as i32 - 1, H as i32 - 1), Rgb565::BLACK);
+        assert_eq!(
+            at(ROOM_LEFT + menu::CORNER as i32, menu::CORNER as i32),
+            Rgb565::GREEN
+        );
+    }
 }

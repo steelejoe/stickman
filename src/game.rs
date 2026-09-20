@@ -2,14 +2,15 @@
 
 use crate::assets::{self, Backdrop, Rgb565Image};
 use crate::behavior::box_beh::BoxBrain;
-use crate::config::ConfigCmd;
 use crate::behavior::event::{Event, EventCtx, Rng32};
 use crate::behavior::plugin::{BehaviorId, BehaviorManager};
 use crate::collision::{
     self, align_to_support, apply_gravity, on_floor_polyline, CollisionKind, ContactMemory, World,
 };
+use crate::config::ConfigCmd;
 use crate::dirty::{self, DIRTY_BUF_LEN};
-use crate::room::{self, RoomId};
+use crate::room::{self, RoomId, RoomsUpdate};
+use crate::speech::SpeechConfig;
 use crate::stickman::eval;
 use crate::stickman::geometry::floor_y_at;
 use crate::stickman::ir::{Actor, ClipId, PoseScratch};
@@ -17,17 +18,20 @@ use crate::stickman::library;
 use crate::DISPLAY_WIDTH;
 
 /// Crate parked in a room the stickman is not standing in.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct StashedBox {
     actor: Actor,
     brain: BoxBrain,
     grounded: bool,
 }
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::geometry::Point;
-use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::geometry::{OriginDimensions, Point, Size};
+use embedded_graphics::image::GetPixel;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::pixelcolor::{BinaryColor, Rgb565};
 use embedded_graphics::prelude::RgbColor;
 use embedded_graphics::primitives::Rectangle;
+use heapless::String;
 
 /// Platform-independent stickman game.
 pub struct Game {
@@ -50,13 +54,15 @@ pub struct Game {
     dog_scratch: PoseScratch,
     /// Layer 0 has been painted; later frames only dirty-restore under figures.
     background_drawn: bool,
-    /// Optional layer-0 image for [`RoomId::Home`] (`'static` — embedded or leaked).
-    home_image: Option<Rgb565Image<'static>>,
-    /// Website/USB color override for home (wins over [`Self::home_image`]).
+    /// Per-room layer-0 images (`'static` — embedded or leaked). Missing slots use Home.
+    room_images: [Option<Rgb565Image<'static>>; room::MAX_ROOMS],
+    room_count: u8,
+    room_names: [room::RoomName; room::MAX_ROOMS],
+    /// Website/USB color override for home (wins over [`Self::room_images`]).
     home_color: Option<Rgb565>,
     current_room: RoomId,
     /// Crate of each room the stickman has left (live crate stays on the fields).
-    stashed_boxes: [Option<StashedBox>; room::ROOM_COUNT],
+    stashed_boxes: [Option<StashedBox>; room::MAX_ROOMS],
     /// Scratch tile for flicker-free dirty presents (composed in RAM, one blit).
     dirty_buf: [Rgb565; DIRTY_BUF_LEN],
     contacts: ContactMemory,
@@ -72,6 +78,13 @@ pub struct Game {
     prev_box_behavior: Option<crate::behavior::box_beh::BoxBehaviorId>,
     /// Previous dog behavior (same reason as [`Self::prev_behavior`]).
     prev_dog_behavior: Option<BehaviorId>,
+    /// CFG toggle: empty room, paused figures, Wi-Fi status in the room.
+    config_mode: bool,
+    config_line1: String<32>,
+    config_line2: String<16>,
+    /// Elapsed time for the config-mode wait bar (DHCP / IP pending).
+    config_wait_ms: u32,
+    speech: SpeechConfig,
 }
 
 impl Game {
@@ -86,6 +99,7 @@ impl Game {
         // Left flat wing, facing the stickman.
         dog_actor.x = (DISPLAY_WIDTH as i32) / 4;
         dog_actor.y = floor_y_at(dog_actor.x);
+        let rooms = room::RoomsConfig::default();
         Self {
             behavior_mgr: BehaviorManager::new(),
             box_brain: BoxBrain::new(),
@@ -103,10 +117,12 @@ impl Game {
             box_scratch: PoseScratch::new(),
             dog_scratch: PoseScratch::new(),
             background_drawn: false,
-            home_image: assets::embedded_background(),
+            room_images: [assets::embedded_background(), None, None],
+            room_count: rooms.count,
+            room_names: rooms.names,
             home_color: None,
             current_room: RoomId::Home,
-            stashed_boxes: [None; room::ROOM_COUNT],
+            stashed_boxes: core::array::from_fn(|_| None),
             dirty_buf: [Rgb565::BLACK; DIRTY_BUF_LEN],
             contacts: ContactMemory::new(),
             stick_grounded: true,
@@ -115,23 +131,46 @@ impl Game {
             prev_behavior: None,
             prev_box_behavior: None,
             prev_dog_behavior: None,
+            config_mode: false,
+            config_line1: String::new(),
+            config_line2: String::new(),
+            config_wait_ms: 0,
+            speech: SpeechConfig::default(),
         }
     }
 
     /// Install a layer-0 image for the home room (replaces any embedded background).
     pub fn set_background(&mut self, image: Rgb565Image<'static>) {
-        self.home_image = Some(image);
+        self.room_images[0] = Some(image);
         self.invalidate_frame();
     }
 
-    /// True when a home-room backdrop image is installed.
+    /// True when a backdrop image is installed for the current room (or Home fallback).
     pub fn has_background_image(&self) -> bool {
-        self.home_image.is_some()
+        self.room_image(self.current_room).is_some()
     }
 
     /// Room the stickman is in.
     pub fn current_room(&self) -> RoomId {
         self.current_room
+    }
+
+    /// How many rooms are linked (1..=3).
+    pub fn room_count(&self) -> u8 {
+        self.room_count
+    }
+
+    /// Tests and the simulator: grow or shrink the linear map without flash.
+    pub fn set_room_count(&mut self, n: u8) {
+        self.apply_rooms(RoomsUpdate {
+            count: n,
+            names: self.room_names.clone(),
+            images: self.room_images,
+        });
+    }
+
+    fn room_image(&self, id: RoomId) -> Option<Rgb565Image<'static>> {
+        self.room_images[id.index()].or(self.room_images[0])
     }
 
     fn backdrop(&self) -> Backdrop {
@@ -140,7 +179,37 @@ impl Game {
                 return Backdrop::Color(color);
             }
         }
-        self.current_room.backdrop(self.home_image)
+        match self.room_image(self.current_room) {
+            Some(img) => Backdrop::Image(img),
+            None => Backdrop::Color(Rgb565::BLACK),
+        }
+    }
+
+    /// Install configured rooms (names, count, optional per-room images).
+    pub fn apply_rooms(&mut self, update: RoomsUpdate) {
+        let count = update.count.clamp(1, room::MAX_ROOMS as u8);
+        if self.current_room.index() >= count as usize {
+            let old = self.current_room;
+            self.stashed_boxes[old.index()] = Some(StashedBox {
+                actor: self.box_actor,
+                brain: core::mem::replace(&mut self.box_brain, BoxBrain::new()),
+                grounded: self.box_grounded,
+            });
+            self.current_room = RoomId::Home;
+            match self.stashed_boxes[RoomId::Home.index()].take() {
+                Some(stashed) => {
+                    self.box_actor = stashed.actor;
+                    self.box_brain = stashed.brain;
+                    self.box_grounded = stashed.grounded;
+                }
+                None => self.spawn_room_box(),
+            }
+            self.contacts = ContactMemory::new();
+        }
+        self.room_count = count;
+        self.room_names = update.names;
+        self.room_images = update.images;
+        self.invalidate_frame();
     }
 
     /// Apply a live setting from the Wi-Fi website (core 0 only).
@@ -154,6 +223,16 @@ impl Game {
             }
         }
         self.invalidate_frame();
+    }
+
+    pub fn set_speech(&mut self, cfg: SpeechConfig) {
+        self.speech = cfg;
+        self.behavior_mgr.set_phrases(self.speech.man.clone());
+        self.dog_brain.set_phrases(self.speech.dog.clone());
+        self.box_brain.set_phrases(self.speech.r#box.clone());
+        for stash in self.stashed_boxes.iter_mut().flatten() {
+            stash.brain.set_phrases(self.speech.r#box.clone());
+        }
     }
 
     fn dog_in_room(&self) -> bool {
@@ -175,13 +254,50 @@ impl Game {
 
     /// Cycle to the next stickman behavior (device BOOT button / sim Space).
     pub fn on_cycle_input(&mut self) {
+        if self.config_mode {
+            return;
+        }
         self.behavior_mgr.cycle_next(&mut self.actor);
     }
 
-    /// Menu taps only. Room taps do nothing. Returns true for **config** (enable Wi-Fi).
+    /// Enter or leave config mode. Returns true when config mode is now on.
+    pub fn toggle_config_mode(&mut self) -> bool {
+        self.config_mode = !self.config_mode;
+        if self.config_mode {
+            self.config_line1.clear();
+            let _ = self.config_line1.push_str("configuration needed");
+            self.config_line2.clear();
+            self.config_wait_ms = 0;
+        }
+        self.invalidate_frame();
+        self.config_mode
+    }
+
+    /// True while the room is cleared and the animation is paused.
+    pub fn in_config_mode(&self) -> bool {
+        self.config_mode
+    }
+
+    /// Overlay text for the cleared room (SSID + IP, or "configuration needed").
+    pub fn set_config_status(&mut self, line1: &str, line2: &str) {
+        if !self.config_mode {
+            return;
+        }
+        if self.config_line1.as_str() == line1 && self.config_line2.as_str() == line2 {
+            return;
+        }
+        self.config_line1.clear();
+        let _ = self.config_line1.push_str(fit_str::<32>(line1));
+        self.config_line2.clear();
+        let _ = self.config_line2.push_str(fit_str::<16>(line2));
+        self.invalidate_frame();
+    }
+
+    /// Menu taps only. Room taps do nothing. Returns true when entering **config** mode.
     pub fn on_tap(&mut self, x: u32, y: u32) -> bool {
         match crate::menu::hit_button(x, y) {
-            Some(crate::menu::MenuButton::Config) => true,
+            Some(crate::menu::MenuButton::Config) => self.toggle_config_mode(),
+            Some(_) if self.config_mode => false,
             Some(crate::menu::MenuButton::Box) => {
                 self.tap_box();
                 false
@@ -231,7 +347,17 @@ impl Game {
             .on_event(&mut self.actor, Event::Tap, EventCtx::default(), entropy);
     }
 
+    fn waiting_for_ip(&self) -> bool {
+        self.config_mode && self.config_line2.is_empty()
+    }
+
     pub fn update(&mut self, delta_ms: u64) {
+        if self.config_mode {
+            if self.waiting_for_ip() {
+                self.config_wait_ms = self.config_wait_ms.saturating_add(delta_ms as u32);
+            }
+            return;
+        }
         let dt = delta_ms as u32;
         let dog_here = self.dog_in_room();
         let was_stick = self.stick_grounded;
@@ -302,7 +428,7 @@ impl Game {
         }
 
         if let Some(kind) = hits.kind[0] {
-            if let Some(next) = self.current_room.neighbor(kind) {
+            if let Some(next) = self.current_room.neighbor(kind, self.room_count) {
                 self.enter_room(next, kind, stick_vx);
                 return;
             }
@@ -427,7 +553,7 @@ impl Game {
         let old = self.current_room;
         self.stashed_boxes[old.index()] = Some(StashedBox {
             actor: self.box_actor,
-            brain: self.box_brain,
+            brain: core::mem::replace(&mut self.box_brain, BoxBrain::new()),
             grounded: self.box_grounded,
         });
         self.current_room = next;
@@ -449,6 +575,7 @@ impl Game {
             ^ (self.current_room.index() as u32).wrapping_mul(0x9E37_79B9)
             ^ (self.actor.x as u32);
         self.box_brain = BoxBrain::with_seed(seed);
+        self.box_brain.set_phrases(self.speech.r#box.clone());
         let mut rng = Rng32::new(seed ^ 0x51ED);
         rng.mix(self.actor.y as u32);
         let x = room::random_floor_x(&mut rng, library::BOX_WIDTH as i32);
@@ -578,6 +705,9 @@ impl Game {
 
     /// True when the displayed poses already match the current actors.
     pub fn is_frame_static(&self) -> bool {
+        if self.config_mode {
+            return self.background_drawn && !self.waiting_for_ip();
+        }
         self.background_drawn
             && self.prev_actor.as_ref() == Some(&self.actor)
             && self.prev_box.as_ref() == Some(&self.box_actor)
@@ -597,6 +727,16 @@ impl Game {
         D: DrawTarget<Color = Rgb565>,
     {
         if self.is_frame_static() {
+            return Ok(());
+        }
+
+        if self.config_mode {
+            if !self.background_drawn {
+                self.draw_config_screen(display)?;
+                self.background_drawn = true;
+            } else if self.waiting_for_ip() {
+                blit_wait_bar(display, self.config_wait_ms)?;
+            }
             return Ok(());
         }
 
@@ -730,6 +870,158 @@ impl Game {
         self.prev_box_behavior = Some(self.box_brain.current());
         Ok(())
     }
+
+    fn draw_config_screen<D>(&self, display: &mut D) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        display.fill_solid(&crate::menu::room_rect(), Rgb565::BLACK)?;
+        crate::menu::mask_room_corners(display)?;
+        crate::menu::draw(display)?;
+        let room = crate::menu::room_rect();
+        let cx = room.top_left.x + room.size.width as i32 / 2;
+        let mid_y = room.top_left.y + room.size.height as i32 / 2;
+        let max_chars = (room.size.width as i32 / CONFIG_CHAR_W).max(1) as usize;
+        let line1 = fit_str_chars(self.config_line1.as_str(), max_chars);
+        let line2 = self.config_line2.as_str();
+        let waiting = line2.is_empty();
+        let y1 = if waiting { mid_y - 52 } else { mid_y - 44 };
+        let x1 = cx - (line1.chars().count() as i32 * CONFIG_CHAR_W) / 2;
+        draw_config_text(display, line1, Point::new(x1, y1))?;
+        if waiting {
+            blit_wait_bar(display, self.config_wait_ms)?;
+        } else {
+            let x2 = cx - (line2.chars().count() as i32 * CONFIG_CHAR_W) / 2;
+            draw_config_text(display, line2, Point::new(x2, y1 + CONFIG_CHAR_H + 8))?;
+        }
+        Ok(())
+    }
+}
+
+const CONFIG_TEXT_SCALE: i32 = 2;
+const CONFIG_CHAR_W: i32 = 10 * CONFIG_TEXT_SCALE;
+const CONFIG_CHAR_H: i32 = 20 * CONFIG_TEXT_SCALE;
+
+fn draw_config_text<D>(display: &mut D, text: &str, origin: Point) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let font = &FONT_10X20;
+    let cw = font.character_size.width;
+    let ch = font.character_size.height;
+    if cw == 0 {
+        return Ok(());
+    }
+    let glyphs_per_row = font.image.size().width / cw;
+    let mut x = origin.x;
+    for c in text.chars() {
+        let glyph_index = font.glyph_mapping.index(c) as u32;
+        let row = glyph_index / glyphs_per_row;
+        let src_x = (glyph_index - row * glyphs_per_row) * cw;
+        let src_y = row * ch;
+        for gy in 0..ch as i32 {
+            for gx in 0..cw as i32 {
+                if font
+                    .image
+                    .pixel(Point::new(src_x as i32 + gx, src_y as i32 + gy))
+                    != Some(BinaryColor::On)
+                {
+                    continue;
+                }
+                display.fill_solid(
+                    &Rectangle::new(
+                        Point::new(
+                            x + gx * CONFIG_TEXT_SCALE,
+                            origin.y + gy * CONFIG_TEXT_SCALE,
+                        ),
+                        Size::new(CONFIG_TEXT_SCALE as u32, CONFIG_TEXT_SCALE as u32),
+                    ),
+                    Rgb565::WHITE,
+                )?;
+            }
+        }
+        x += CONFIG_CHAR_W + font.character_spacing as i32 * CONFIG_TEXT_SCALE;
+    }
+    Ok(())
+}
+
+const WAIT_BAR_W: u32 = 180;
+const WAIT_BAR_H: u32 = 12;
+const WAIT_STRIPE_W: i32 = 40;
+const WAIT_BAR_PERIOD: u32 = 1400;
+
+fn wait_bar_rect() -> Rectangle {
+    let room = crate::menu::room_rect();
+    let cx = room.top_left.x + room.size.width as i32 / 2;
+    let mid_y = room.top_left.y + room.size.height as i32 / 2;
+    Rectangle::new(
+        Point::new(cx - WAIT_BAR_W as i32 / 2, mid_y + 8),
+        Size::new(WAIT_BAR_W, WAIT_BAR_H),
+    )
+}
+
+fn wait_bar_stripe_x(t_ms: u32) -> i32 {
+    let travel = (WAIT_BAR_W as i32 - 4 - WAIT_STRIPE_W).max(1);
+    let cycle = t_ms % WAIT_BAR_PERIOD;
+    let half = WAIT_BAR_PERIOD / 2;
+    if cycle <= half {
+        cycle as i32 * travel / half as i32
+    } else {
+        travel - (cycle - half) as i32 * travel / half as i32
+    }
+}
+
+fn wait_bar_pixel(lx: i32, ly: i32, t_ms: u32) -> Rgb565 {
+    let w = WAIT_BAR_W as i32;
+    let h = WAIT_BAR_H as i32;
+    if lx <= 0 || ly <= 0 || lx >= w - 1 || ly >= h - 1 {
+        return Rgb565::WHITE;
+    }
+    let sx = 2 + wait_bar_stripe_x(t_ms);
+    if lx >= sx && lx < sx + WAIT_STRIPE_W {
+        Rgb565::WHITE
+    } else {
+        Rgb565::BLACK
+    }
+}
+
+fn blit_wait_bar<D>(display: &mut D, t_ms: u32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let area = wait_bar_rect();
+    let w = WAIT_BAR_W as i32;
+    let h = WAIT_BAR_H as i32;
+    display.fill_contiguous(
+        &area,
+        (0..h).flat_map(move |ly| (0..w).map(move |lx| wait_bar_pixel(lx, ly, t_ms))),
+    )
+}
+
+fn fit_str_chars(s: &str, max_chars: usize) -> &str {
+    if s.chars().count() <= max_chars {
+        return s;
+    }
+    let mut end = 0;
+    for (i, (off, _)) in s.char_indices().enumerate() {
+        if i == max_chars {
+            end = off;
+            break;
+        }
+        end = s.len();
+    }
+    &s[..end]
+}
+
+fn fit_str<const N: usize>(s: &str) -> &str {
+    if s.len() <= N {
+        return s;
+    }
+    let mut end = N;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 fn closest_partner(mem: &ContactMemory, i: usize, xs: &[i32; 3]) -> Option<usize> {
@@ -882,14 +1174,91 @@ mod tests {
     }
 
     #[test]
-    fn menu_config_requests_wifi_without_tapping_entities() {
+    fn menu_config_toggles_paused_room() {
         let mut game = Game::new();
         let stick = game.actor.clip;
+        let stick_x = game.actor.x;
+        let box_clip = game.box_actor.clip;
         let (x, y) = menu_xy(crate::menu::MenuButton::Config);
         assert!(game.on_tap(x, y));
+        assert!(game.in_config_mode());
         assert_eq!(game.actor.clip, stick);
-        assert_eq!(game.box_actor.clip, ClipId::BoxIdle);
+        assert_eq!(game.box_actor.clip, box_clip);
         assert_eq!(game.dog_actor.clip, ClipId::DogWalk);
+
+        game.update(200);
+        assert_eq!(game.actor.x, stick_x);
+
+        let (bx, by) = menu_xy(crate::menu::MenuButton::Box);
+        assert!(!game.on_tap(bx, by));
+        assert_eq!(game.box_actor.clip, box_clip);
+        game.on_cycle_input();
+        assert_eq!(game.actor.clip, stick);
+
+        assert!(!game.on_tap(x, y));
+        assert!(!game.in_config_mode());
+    }
+
+    #[test]
+    fn config_mode_writes_status_in_the_room() {
+        let mut game = Game::new();
+        let (x, y) = menu_xy(crate::menu::MenuButton::Config);
+        assert!(game.on_tap(x, y));
+        game.set_config_status("HomeNet", "192.168.1.42");
+        const W: u32 = crate::DISPLAY_WIDTH;
+        const H: u32 = crate::DISPLAY_HEIGHT;
+        let mut buf = [Rgb565::RED; (W * H) as usize];
+        let mut display = crate::dirty::SliceDisplay::new(&mut buf, W, H);
+        game.draw(&mut display).unwrap();
+        let at = |x: i32, y: i32| buf[(y as u32 * W + x as u32) as usize];
+        assert_eq!(at(crate::menu::ROOM_LEFT + 8, 8), Rgb565::BLACK);
+        let room_white = buf
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| **c == Rgb565::WHITE && (*i as u32 % W) >= crate::menu::MENU_WIDTH)
+            .count();
+        assert!(
+            room_white > 40,
+            "SSID/IP should paint in the room, got {room_white} white pixels"
+        );
+        assert!(game.is_frame_static());
+    }
+
+    #[test]
+    fn config_mode_wait_bar_runs_until_ip_arrives() {
+        let mut game = Game::new();
+        let (x, y) = menu_xy(crate::menu::MenuButton::Config);
+        assert!(game.on_tap(x, y));
+        game.set_config_status("HomeNet", "");
+        const W: u32 = crate::DISPLAY_WIDTH;
+        const H: u32 = crate::DISPLAY_HEIGHT;
+        let mut buf = [Rgb565::RED; (W * H) as usize];
+        let at = |buf: &[Rgb565], x: i32, y: i32| buf[(y as u32 * W + x as u32) as usize];
+        let cx = crate::menu::ROOM_LEFT + (W as i32 - crate::menu::MENU_WIDTH as i32) / 2;
+        let mid_y = H as i32 / 2;
+        let x0 = cx - 90;
+        game.update(0);
+        game.draw(&mut crate::dirty::SliceDisplay::new(&mut buf, W, H))
+            .unwrap();
+        assert_eq!(at(&buf, x0 + 8, mid_y + 10), Rgb565::WHITE);
+        buf[(8 * W + crate::menu::ROOM_LEFT as u32 + 8) as usize] = Rgb565::RED;
+        game.update(700);
+        assert!(!game.is_frame_static());
+        game.draw(&mut crate::dirty::SliceDisplay::new(&mut buf, W, H))
+            .unwrap();
+        assert_eq!(at(&buf, x0 + 8, mid_y + 10), Rgb565::BLACK);
+        assert_eq!(
+            at(&buf, crate::menu::ROOM_LEFT + 8, 8),
+            Rgb565::RED,
+            "later frames should only blit the wait bar"
+        );
+        game.set_config_status("HomeNet", "192.168.1.82");
+        game.update(33);
+        game.draw(&mut crate::dirty::SliceDisplay::new(&mut buf, W, H))
+            .unwrap();
+        assert!(game.is_frame_static());
+        game.update(400);
+        assert!(game.is_frame_static());
     }
 
     #[test]
@@ -1036,6 +1405,12 @@ mod tests {
     #[test]
     fn walking_down_the_bump_follows_the_ramp() {
         let mut game = Game::new();
+        let peak_x = crate::menu::ROOM_LEFT + crate::menu::room_width() as i32 / 2;
+        game.actor.x = peak_x;
+        game.actor.y = floor_y_at(peak_x);
+        // Keep the crate off the downhill so a model hit cannot jump off the ramp.
+        game.box_actor.x = crate::menu::ROOM_LEFT + 40;
+        game.box_actor.y = floor_y_at(game.box_actor.x);
         let y0 = game.actor.y;
         assert_eq!(y0, floor_y_at(game.actor.x));
         assert!(y0 < floor_y(), "spawn should sit on the bump peak");
@@ -1117,6 +1492,25 @@ mod tests {
         assert!(bubble.bounds.top_left.y < head.y);
     }
 
+    #[test]
+    fn custom_speech_bank_and_talk_chance() {
+        let mut game = Game::new();
+        let mut cfg = crate::speech::SpeechConfig::default();
+        cfg.man.talk_pct = 100;
+        cfg.man.set_lines(["Ping"]);
+        game.set_speech(cfg);
+        let (x, y) = menu_xy(crate::menu::MenuButton::Man);
+        assert!(!game.on_tap(x, y));
+        assert!(game.behavior_mgr.is_talking());
+        assert_eq!(game.behavior_mgr.talk_phrase(), Some("Ping"));
+    }
+
+    fn game_with_rooms(n: u8) -> Game {
+        let mut game = Game::new();
+        game.set_room_count(n);
+        game
+    }
+
     fn press_against_edge(game: &mut Game, left: bool) {
         game.actor.facing_left = left;
         // Sample on a flat wing first; the spawn pose is rotated on the bump.
@@ -1153,25 +1547,35 @@ mod tests {
     #[test]
     fn website_color_overrides_home_backdrop() {
         let mut game = Game::new();
-        game.apply_config(ConfigCmd::SetBackdropColor {
-            r: 255,
-            g: 0,
-            b: 0,
-        });
-        assert_eq!(game.backdrop(), Backdrop::Color(crate::config::rgb888_to_565(255, 0, 0)));
+        game.apply_config(ConfigCmd::SetBackdropColor { r: 255, g: 0, b: 0 });
+        assert_eq!(
+            game.backdrop(),
+            Backdrop::Color(crate::config::rgb888_to_565(255, 0, 0))
+        );
         game.apply_config(ConfigCmd::ClearBackdropColor);
-        assert_ne!(game.backdrop(), Backdrop::Color(crate::config::rgb888_to_565(255, 0, 0)));
+        assert_ne!(
+            game.backdrop(),
+            Backdrop::Color(crate::config::rgb888_to_565(255, 0, 0))
+        );
     }
 
     #[test]
-    fn walking_off_home_right_enters_blue_room() {
+    fn walking_off_home_right_stays_when_only_home() {
         let mut game = Game::new();
-        assert_eq!(game.current_room(), RoomId::Home);
         walk_off_edge(&mut game, false);
-        assert_eq!(game.current_room(), RoomId::Blue);
+        assert_eq!(game.current_room(), RoomId::Home);
+    }
+
+    #[test]
+    fn walking_off_home_right_enters_second_room() {
+        let mut game = game_with_rooms(2);
+        assert_eq!(game.current_room(), RoomId::Home);
+        let home_bg = game.backdrop();
+        walk_off_edge(&mut game, false);
+        assert_eq!(game.current_room(), RoomId::Two);
         assert!(game.actor.x < DISPLAY_WIDTH as i32 / 2);
         assert!(!game.actor.facing_left);
-        assert_eq!(game.backdrop(), Backdrop::Color(Rgb565::BLUE));
+        assert_eq!(game.backdrop(), home_bg);
         assert_eq!(game.box_actor.clip, ClipId::BoxIdle);
         assert_eq!(game.box_actor.y, floor_y_at(game.box_actor.x));
         assert!(game.box_actor.x >= library::BOX_WIDTH as i32);
@@ -1189,22 +1593,22 @@ mod tests {
     }
 
     #[test]
-    fn blue_right_edge_still_bounces() {
-        let mut game = Game::new();
+    fn second_room_right_edge_still_bounces() {
+        let mut game = game_with_rooms(2);
         walk_off_edge(&mut game, false);
-        assert_eq!(game.current_room(), RoomId::Blue);
+        assert_eq!(game.current_room(), RoomId::Two);
         press_against_edge(&mut game, false);
         game.update(33);
-        assert_eq!(game.current_room(), RoomId::Blue);
+        assert_eq!(game.current_room(), RoomId::Two);
         assert!(game.actor.facing_left);
     }
 
     #[test]
-    fn walking_back_from_blue_restores_home_box() {
-        let mut game = Game::new();
+    fn walking_back_from_second_room_restores_home_box() {
+        let mut game = game_with_rooms(2);
         let home_box_x = game.box_actor.x;
         walk_off_edge(&mut game, false);
-        assert_eq!(game.current_room(), RoomId::Blue);
+        assert_eq!(game.current_room(), RoomId::Two);
         walk_off_edge(&mut game, true);
         assert_eq!(game.current_room(), RoomId::Home);
         assert_eq!(game.box_actor.x, home_box_x);
@@ -1213,9 +1617,9 @@ mod tests {
 
     #[test]
     fn dog_stays_paused_in_home_while_away() {
-        let mut game = Game::new();
+        let mut game = game_with_rooms(2);
         walk_off_edge(&mut game, false);
-        assert_eq!(game.current_room(), RoomId::Blue);
+        assert_eq!(game.current_room(), RoomId::Two);
         let dog_x = game.dog_actor.x;
         let dog_t = game.dog_actor.time_ms;
         let dog_clip = game.dog_actor.clip;
@@ -1237,10 +1641,10 @@ mod tests {
     }
 
     #[test]
-    fn blue_room_box_slides_like_the_home_crate() {
-        let mut game = Game::new();
+    fn second_room_box_slides_like_the_home_crate() {
+        let mut game = game_with_rooms(2);
         walk_off_edge(&mut game, false);
-        assert_eq!(game.current_room(), RoomId::Blue);
+        assert_eq!(game.current_room(), RoomId::Two);
         game.box_brain.on_event(
             &mut game.box_actor,
             Event::Collision,
@@ -1259,5 +1663,28 @@ mod tests {
         ));
         game.update(33);
         assert_eq!(game.box_actor.y, floor_y_at(game.box_actor.x));
+    }
+
+    #[test]
+    fn three_rooms_chain_right_then_left() {
+        let mut game = game_with_rooms(3);
+        walk_off_edge(&mut game, false);
+        assert_eq!(game.current_room(), RoomId::Two);
+        walk_off_edge(&mut game, false);
+        assert_eq!(game.current_room(), RoomId::Three);
+        walk_off_edge(&mut game, false);
+        assert_eq!(game.current_room(), RoomId::Three);
+        walk_off_edge(&mut game, true);
+        assert_eq!(game.current_room(), RoomId::Two);
+    }
+
+    #[test]
+    fn shrinking_rooms_returns_to_home() {
+        let mut game = game_with_rooms(3);
+        walk_off_edge(&mut game, false);
+        walk_off_edge(&mut game, false);
+        assert_eq!(game.current_room(), RoomId::Three);
+        game.set_room_count(1);
+        assert_eq!(game.current_room(), RoomId::Home);
     }
 }

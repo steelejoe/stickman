@@ -10,7 +10,10 @@ use esp_hal::{
     delay::Delay,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     i2c::master::{Config as I2cConfig, I2c},
-    peripherals::{GPIO0, GPIO2, GPIO3, GPIO5, GPIO6, GPIO7, GPIO17, GPIO18, GPIO38, GPIO47, GPIO48, I2C0, SPI2},
+    peripherals::{
+        GPIO0, GPIO17, GPIO18, GPIO2, GPIO3, GPIO38, GPIO47, GPIO48, GPIO5, GPIO6, GPIO7, I2C0,
+        SPI2,
+    },
     spi::{
         master::{Config as SpiConfig, Spi},
         Mode,
@@ -114,9 +117,9 @@ impl App {
                     ),
                 }
                 match touch.read() {
-                    Ok(_) => esp_println::println!(
-                        "Touch: CST816 ready (menu: CFG / BOX / DOG / MAN)"
-                    ),
+                    Ok(_) => {
+                        esp_println::println!("Touch: CST816 ready (menu: CFG / BOX / DOG / MAN)")
+                    }
                     Err(_) => esp_println::println!(
                         "Touch: probe failed at boot; taps may still work after contact"
                     ),
@@ -148,7 +151,7 @@ impl App {
     pub async fn run(&mut self) -> ! {
         esp_println::println!("Stickman running!");
         esp_println::println!(
-            "Menu: CFG enables Wi-Fi; BOX / DOG / MAN tap that figure. Room taps do nothing. BOOT cycles stickman behaviors."
+            "Menu: CFG toggles config mode (Wi-Fi + status). BOX / DOG / MAN tap that figure. Room taps do nothing. BOOT cycles stickman behaviors."
         );
         let mut last_tick = Instant::now();
         let frame_duration = Duration::from_millis(FRAME_MS);
@@ -164,11 +167,20 @@ impl App {
                 if let Some(point) = touch.poll_tap() {
                     let x = point.x as u32;
                     let y = point.y as u32;
-                    if self.game.on_tap(x, y) {
-                        esp_println::println!("Menu: CFG — enable Wi-Fi");
-                        net::try_start();
-                    } else if crate::menu::hit_button(x, y).is_some() {
-                        esp_println::println!("Menu: ({x}, {y})");
+                    match crate::menu::hit_button(x, y) {
+                        Some(btn) => {
+                            esp_println::println!("Menu: {} at ({x}, {y})", btn.label());
+                            let entered = self.game.on_tap(x, y);
+                            if btn == crate::menu::MenuButton::Config {
+                                net::set_wanted(entered);
+                                if entered {
+                                    net::try_start();
+                                }
+                            }
+                        }
+                        None => {
+                            esp_println::println!("Menu: miss at ({x}, {y})");
+                        }
                     }
                 }
             }
@@ -182,6 +194,27 @@ impl App {
 
             while let Some(cmd) = crate::net::try_recv_config() {
                 self.game.apply_config(cmd);
+            }
+            while let Some(speech) = crate::net::try_recv_speech() {
+                self.game.set_speech(speech);
+            }
+            while let Some(rooms) = crate::net::try_recv_rooms() {
+                self.game.apply_rooms(rooms);
+            }
+
+            if self.game.in_config_mode() {
+                let s = net::try_status();
+                if s.configured {
+                    let ssid = if s.ssid.is_empty() {
+                        "..."
+                    } else {
+                        s.ssid.as_str()
+                    };
+                    self.game.set_config_status(ssid, s.ip.as_str());
+                } else {
+                    self.game
+                        .set_config_status("configuration needed", crate::config::SOFTAP_IP);
+                }
             }
 
             self.game.update(delta_ms);

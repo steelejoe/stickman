@@ -84,10 +84,26 @@ where
 }
 
 /// Map CST816 coords to landscape display pixels (536×240).
+///
+/// The panel is LandscapeFlipped (180°). The controller already reports
+/// landscape X/Y, so both axes are inverted to match.
 fn map_to_display(raw_x: u16, raw_y: u16) -> (u16, u16) {
-    // X is already in panel width units (~0..535). Invert for LandscapeFlipped.
-    // (Older code scaled as if max were 239, which crushed the center/left into x=0.)
-    let x = (DISPLAY_WIDTH as u16 - 1).saturating_sub(raw_x.min(DISPLAY_WIDTH as u16 - 1));
-    let y = raw_y.min(DISPLAY_HEIGHT as u16 - 1);
+    let max_x = DISPLAY_WIDTH as u16 - 1;
+    let max_y = DISPLAY_HEIGHT as u16 - 1;
+    let x = max_x.saturating_sub(raw_x.min(max_x));
+    let y = max_y.saturating_sub(raw_y.min(max_y));
     (x, y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn landscape_flipped_inverts_both_axes() {
+        assert_eq!(map_to_display(0, 0), (535, 239));
+        assert_eq!(map_to_display(535, 239), (0, 0));
+        assert_eq!(map_to_display(20, 10), (515, 229));
+        assert_eq!(map_to_display(20, 200), (515, 39));
+    }
 }

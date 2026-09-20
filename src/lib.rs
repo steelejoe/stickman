@@ -12,6 +12,7 @@ pub mod hardware;
 pub mod layer;
 pub mod menu;
 pub mod room;
+pub mod speech;
 pub mod stickman;
 
 #[cfg(feature = "device")]
